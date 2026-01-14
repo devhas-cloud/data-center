@@ -1,0 +1,43 @@
+# Laravel / PHP
+/vendor
+/node_modules
+/public/hot
+/public/storage
+/.idea
+/.vscode
+/.env
+/.phpunit.result.cache
+/.env.backup
+/.php_cs.cache
+/.php_cs.cache
+
+# Composer
+composer.phar
+
+# Laravel storage
+/storage/*.key
+/storage/app/public/*
+/storage/framework/cache/data/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/logs/*
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# NPM / Yarn
+npm-debug.log*
+yarn-error.log*
+
+# IDEs
+*.sublime-workspace
+*.sublime-project
+.idea/
+*.code-workspace
+
+# Optional: ignore compiled assets
+/public/css/*.css.map
+/public/js/*.js.map
+/public/mix-manifest.json
+/public/hot

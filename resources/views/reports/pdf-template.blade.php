@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Device Report - {{ $device_id }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'DejaVu Sans', Arial, sans-serif;
+            font-size: 10pt;
+            line-height: 1.4;
+            color: #333;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #333;
+        }
+
+        .header h2 {
+            font-size: 18pt;
+            margin-bottom: 5px;
+            color: #1a1a1a;
+            font-weight: bold;
+        }
+
+        .header h4 {
+            font-size: 14pt;
+            color: #555;
+            font-weight: normal;
+        }
+
+        .info-section {
+            margin-bottom: 15px;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .info-section table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .info-section td {
+            padding: 4px 8px;
+            font-size: 9pt;
+        }
+
+        .info-section td:first-child {
+            font-weight: bold;
+            width: 150px;
+            color: #555;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 8pt;
+        }
+
+        .data-table thead {
+            background-color: #333;
+            color: white;
+        }
+
+        .data-table th {
+            padding: 8px 4px;
+            text-align: center;
+            font-weight: bold;
+            border: 1px solid #ddd;
+            font-size: 8pt;
+        }
+
+        .data-table td {
+            padding: 6px 4px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+
+        .data-table tbody tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .data-table tbody tr:hover {
+            background-color: #f0f0f0;
+        }
+
+        .footer {
+            margin-top: 20px;
+            padding-top: 10px;
+            border-top: 2px solid #333;
+            text-align: center;
+            font-size: 8pt;
+            color: #777;
+        }
+
+        .page-break {
+            page-break-after: always;
+        }
+
+        @page {
+            margin: 15mm;
+            margin-bottom: 20mm;
+            
+            @bottom-left {
+                content: "Page " counter(page) " of " counter(pages);
+                font-size: 9pt;
+                color: #555;
+            }
+        }
+
+        .summary {
+            margin-top: 10px;
+            padding: 8px;
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            font-size: 9pt;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            /* vertical align */
+            gap: 15px;
+            /* space between image & text */
+        }
+
+        .logo {
+            height: 50px;
+        }
+
+        .header-text h2 {
+            margin: 0;
+        }
+
+        .header-text label {
+            font-size: 14px;
+        }
+
+        .footer {
+            font-size: 11px;
+            color: #555;
+            margin-top: 15px;
+            border-top: 1px solid #ddd;
+            padding-top: 8px;
+            position: relative;
+        }
+
+        .page-number {
+            position: fixed;
+            bottom: 10mm;
+            left: 15mm;
+            font-size: 9pt;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        @if (!empty($logo_base64))
+            <img src="{{ $logo_base64 }}" alt="Company Logo" class="logo" style="width: 100px; height: auto;">
+        @endif
+
+        <div class="header-text">
+            <h2>DEVICE MONITORING REPORT</h2>
+            <label>
+                {{ collect($parameters)->pluck('parameter_label')->join(', ') }}
+            </label>
+        </div>
+    </div>
+
+
+    <div class="info-section">
+        <table>
+            <tr>
+                <td>Device ID:</td>
+                <td><strong>{{ $device_id }}</strong></td>
+                <td>Category:</td>
+                <td><strong>{{ $device_category }}</strong></td>
+            </tr>
+            <tr>
+                <td>Report Periode</td>
+                <td><strong>{{ $date_range['start'] }} to {{ $date_range['end'] }}</strong></td>
+                <td>Total Records:</td>
+                <td><strong>{{ $total_records }}</strong></td>
+            </tr>
+            <tr>
+                <td>Generated Date:</td>
+                <td><strong>{{ date('Y-m-d H:i:s') }}</strong></td>
+                <td>Generated By:</td>
+                <td><strong>{{ auth()->user()->username ?? 'System' }}</strong></td>
+            </tr>
+        </table>
+    </div>
+
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th style="width: 30px;">No</th>
+                <th style="width: 80px;">Date</th>
+                <th style="width: 60px;">Time</th>
+                @foreach ($parameters as $param)
+                    <th>{{ $param['parameter_label'] }}<br><small>({{ $param['parameter_unit'] }})</small></th>
+                @endforeach
+            </tr>
+        </thead>
+        <tbody>
+            @foreach ($data as $row)
+                <tr>
+                    <td>{{ $row['no'] }}</td>
+                    <td>{{ $row['date'] }}</td>
+                    <td>{{ $row['time'] }}</td>
+                    @foreach ($parameters as $param)
+                        <td>{{ isset($row[$param['parameter_name']]) && $row[$param['parameter_name']] !== null ? $row[$param['parameter_name']] : '-' }}
+                        </td>
+                    @endforeach
+                </tr>
+            @endforeach
+        </tbody>
+    </table>
+
+    <div class="footer" style="text-align: center;">
+        <div style="display: inline-block; vertical-align: middle;">
+            <strong>Powered by</strong>
+        </div>
+        @if (!empty($logo_by))
+            <div style="display: inline-block; vertical-align: middle; margin-left: 6px;">
+                <img src="{{ $logo_by }}" alt="Company Logo" style="height:40px; vertical-align: middle;">
+            </div>
+        @endif
+        
+        <div style="margin-top: 6px; font-size: 11px; color: #555; text-align: center;">
+            This is a computer-generated report. No signature required.
+        </div>
+    </div>
+
+</body>
+
+</html>
