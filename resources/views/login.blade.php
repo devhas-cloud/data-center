@@ -293,6 +293,8 @@
                     <form method="POST" action="{{ route('login') }}" id="loginForm">
                         @csrf
 
+                        <input type="hidden" name="timezone" id="timezone">
+
                         <!-- Username Field -->
                         <div class="mb-3">
                             <label for="username" class="form-label fw-semibold">Username</label>
@@ -384,6 +386,14 @@
     <!-- Custom JavaScript -->
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+
+            // Timezona
+            const timezoneInput = document.getElementById('timezone');
+            if (timezoneInput) {
+                timezoneInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            }
+
+
             // Toggle password visibility
             const togglePassword = document.getElementById('togglePassword');
             const passwordInput = document.getElementById('password');

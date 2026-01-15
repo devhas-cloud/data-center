@@ -31,7 +31,7 @@ class AuthController extends Controller
 
         $credentials = $request->validate([
             'username' => 'required|string|max:255',
-            'password' => 'required|string',
+            'password' => 'required|string'
         ]);
 
         // Sanitize username input
@@ -40,6 +40,9 @@ class AuthController extends Controller
         if (Auth::attempt($credentials, $request->filled('remember'))) {
             $request->session()->regenerate();
             
+            // Set user timezone if provided
+            $timezone = $request->timezone ?? 'UTC';
+
             // Clear rate limiter on successful login
             RateLimiter::clear($key);
             
@@ -47,8 +50,17 @@ class AuthController extends Controller
             Log::info('User logged in successfully', [
                 'username' => $credentials['username'],
                 'ip' => $request->ip(),
-                'user_agent' => $request->userAgent()
+                'user_agent' => $request->userAgent(),
+                'timezone' => $timezone
             ]);
+
+            //tambah ke session
+            session(['timezone' => $timezone]);
+
+            //update timezone in user profile
+            $user = Auth::user();
+            $user->timezone = $timezone;
+            $user->save();
 
             if (Auth::user()->role === 'admin') {
                 return redirect()->intended('/admin/home');

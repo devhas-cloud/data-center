@@ -17,6 +17,8 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Nette\Utils\Json;
+
 //use Dompdf\Dompdf;
 //use Dompdf\Options;
 
@@ -62,14 +64,14 @@ class UserController extends Controller
                 foreach ($device->sensors as $sensor) {
                     $latestData = DataModel::where('device_id', $device->device_id)
                         ->where('parameter_name', $sensor->parameter_name)
-                        ->orderBy('recorded_at', 'desc')
+                        ->orderBy('timestamp', 'desc')
                         ->first();
 
                     if ($latestData) {
                         $sensorsData[] = [
                             'parameter_name' => $sensor->parameter_name,
                             'latest_value' => $latestData->value,
-                            'recorded_at' => $latestData->recorded_at,
+                            'recorded_at' => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
                         ];
                     }
                 }
@@ -189,14 +191,14 @@ class UserController extends Controller
                     ->first();
                 $latestData = DataModel::where('device_id', $deviceId)
                     ->where('parameter_name', $parameter->parameter_name)
-                    ->orderBy('recorded_at', 'desc')
+                    ->orderBy('timestamp', 'desc')
                     ->first();
 
                 return [
                     'parameter_label' => $parameter->parameter_label,
                     'parameter_name' => $sensor->parameter_name,
                     'latest_value' => $latestData ? $latestData->value : null,
-                    'recorded_at' => $latestData ? date('Y-m-d H:i', strtotime($latestData->recorded_at)) : null,
+                    'recorded_at' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s') : null,
                     'parameter_indicator_min' => $sensor->parameter_indicator_min,
                     'parameter_indicator_max' => $sensor->parameter_indicator_max,
                     'sensor_unit' => $sensor->sensor_unit,
@@ -226,12 +228,19 @@ class UserController extends Controller
         $now = now();
         $startTime = $now->copy()->subHours(24); // 24 jam yang lalu
         $endTime = $now->copy(); // Waktu sekarang
+
+        //ubah menjadi unix timestamp
+
+        
+
+
         $data = DataModel::where('device_id', $deviceId)
             ->where('parameter_name', $parameter)
-            ->where('recorded_at', '>=', $startTime)
-            ->where('recorded_at', '<=', $endTime)
-            ->orderBy('recorded_at', 'asc')
+            ->where('timestamp', '>=', $startTime->timestamp)
+            ->where('timestamp', '<=', $endTime->timestamp)
+            ->orderBy('timestamp', 'asc')
             ->get();
+
 
         $labels = [];
         $values = [];
@@ -242,10 +251,12 @@ class UserController extends Controller
             $gapTimeout = $device->device_gap_timeout ?? 1;
         }
 
+    
         foreach ($data as $item) {
-            $currentTime = \Carbon\Carbon::parse($item->recorded_at);
-
+             $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
+                ->setTimezone(config('app.timezone'));
             // Jika ada data sebelumnya, cek gap waktunya
+
             if ($previousTime !== null) {
                 $diffInMinutes = $previousTime->diffInMinutes($currentTime);
 
@@ -298,9 +309,9 @@ class UserController extends Controller
         // Aggregate data hourly
         $data = DataModel::where('device_id', $deviceId)
             ->where('parameter_name', $parameter)
-            ->where('recorded_at', '>=', $startTime)
-            ->where('recorded_at', '<=', $endTime)
-            ->select(DB::raw('DATE_FORMAT(recorded_at, "%Y-%m-%d %H:00") as hour'), DB::raw('AVG(value) as avg_value'))
+            ->where('timestamp', '>=', $startTime->timestamp)
+            ->where('timestamp', '<=', $endTime->timestamp)
+            ->select(DB::raw('DATE_FORMAT(FROM_UNIXTIME(timestamp), "%Y-%m-%d %H:00") as hour'), DB::raw('AVG(value) as avg_value'))
             ->groupBy('hour')
             ->orderBy('hour', 'asc')
             ->get();
@@ -334,7 +345,7 @@ class UserController extends Controller
                              AVG(CASE WHEN parameter_name = "wspeed" THEN value END) as wspeed,
                              AVG(CASE WHEN parameter_name = "wdir" THEN value END) as wdir')
                 ->whereIn('parameter_name', ['wspeed', 'wdir'])
-                ->where('recorded_at', '>=', $startTime)
+                ->where('timestamp', '>=', $startTime->timestamp)
                 ->where('device_id', $deviceId)
                 ->groupByRaw('FROM_UNIXTIME(timestamp, "%Y-%m-%d %H:%i")')
                 ->orderBy('date', 'asc')
@@ -375,6 +386,10 @@ class UserController extends Controller
             $startDate = $request->input('start_date');
             $endDate = $request->input('end_date');
 
+            // ubah format tanggal ke unix timestamp
+            $startDate = Carbon::parse($startDate)->timestamp;
+            $endDate = Carbon::parse($endDate)->timestamp;
+
             if (!$parameterName || !$startDate || !$endDate) {
                 return response()->json([
                     'labels' => [],
@@ -387,8 +402,8 @@ class UserController extends Controller
             // Query data tanpa aggregation - ambil semua data points
             $data = DataModel::where('device_id', $deviceId)
                 ->where('parameter_name', $parameterName)
-                ->whereBetween('recorded_at', [$startDate, $endDate])
-                ->orderBy('recorded_at', 'asc')
+                ->whereBetween('timestamp', [$startDate, $endDate])
+                ->orderBy('timestamp', 'asc')
                 ->get();
             // Get sensor unit
             $sensor = SensorModel::where('device_id', $deviceId)
@@ -406,7 +421,8 @@ class UserController extends Controller
             }
 
             foreach ($data as $item) {
-                $currentTime = \Carbon\Carbon::parse($item->recorded_at);
+                $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
+                ->setTimezone(config('app.timezone'));
 
                 // Jika ada data sebelumnya, cek gap waktunya
                 if ($previousTime !== null) {
@@ -486,14 +502,14 @@ class UserController extends Controller
             return response()->json(['error' => 'Device not found'], 404);
         }
         $latestData = DataModel::where('device_id', $deviceId)
-            ->orderBy('recorded_at', 'desc')
+            ->orderBy('timestamp', 'desc')
             ->first();
 
         $dataDevice = [
             'device_id' => $device->device_id,
             'device_name' => $device->device_name,
             'device_status' => $this->DeviceStatus($device->device_ip),
-            'device_last_update_data' => $latestData ? date('Y-m-d H:i', strtotime($latestData->recorded_at)) : 'No data',
+            'device_last_update_data' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i') : 'No data',
             'device_category' => $device->device_category,
             'device_location' => $device->device_location,
             'device_date_installation' => $device->date_installation,
@@ -881,150 +897,154 @@ class UserController extends Controller
 
 
     public function getTableDeviceReport(Request $request)
-    {
-        try {
-            // Validate request
-            // Validate request
-            $validated = $request->validate([
-                'device_id' => 'required|string|exists:tbl_device,device_id',
-                'start_date' => 'required|date',
-                'end_date' => 'required|date|after_or_equal:start_date',
-            ]);
+{
+    try {
+        // Validate request
+        $validated = $request->validate([
+            'device_id' => 'required|string|exists:tbl_device,device_id',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
 
-            $deviceId = $validated['device_id'];
-            $startDate = $validated['start_date'];
-            $endDate = $validated['end_date'];
+        $deviceId = $validated['device_id'];
+        $startDate = $validated['start_date'];
+        $endDate = $validated['end_date'];
 
-            // Verify device belongs to user - get device_id from tbl_access
-            $device = DeviceModel::where('device_id', $deviceId)
-                ->whereIn('id', function ($query) {
-                    $query->select('device_id')
-                        ->from('tbl_access')
-                        ->where('user_id', Auth::id());
-                })
-                ->select('device_id', 'device_category')
-                ->first();
+        // Convert to Unix timestamp
+        $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+        $endDateUnix = Carbon::parse($endDate)->endOfDay()->timestamp;
 
-            if (!$device) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Device not found or unauthorized'
-                ], 403);
-            }
+        // Verify device belongs to user
+        $device = DeviceModel::where('device_id', $deviceId)
+            ->whereIn('id', function ($query) {
+                $query->select('device_id')
+                    ->from('tbl_access')
+                    ->where('user_id', Auth::id());
+            })
+            ->select('device_id', 'device_category')
+            ->first();
 
-            // Get sensors with parameter details using optimized join
-            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
-                ->where('tbl_sensor.status', 'active')
-                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
-                ->select(
-                    'tbl_sensor.parameter_name',
-                    'tbl_parameter.parameter_label',
-                    'tbl_sensor.sensor_unit'
-                )
-                ->orderBy('tbl_sensor.id', 'asc')
-                ->get();
+        if (!$device) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Device not found or unauthorized'
+            ], 403);
+        }
 
-            if ($sensors->isEmpty()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No active sensors found for this device'
-                ], 404);
-            }
-
-            // Build parameter info array and parameter list in one loop
-            $parameterInfo = [];
-            $parameters = [];
-            foreach ($sensors as $sensor) {
-                $parameters[] = $sensor->parameter_name;
-                $parameterInfo[] = [
-                    'parameter_name' => $sensor->parameter_name,
-                    'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
-                    'parameter_unit' => $sensor->sensor_unit ?? ''
-                ];
-            }
-
-            // Get data with optimized query - use DB raw for date truncation
-            $data = DataModel::select(
-                DB::raw("DATE_FORMAT(recorded_at, '%Y-%m-%d %H:%i') as timestamp_minute"),
-                'parameter_name',
-                'value',
-                'recorded_at'
+        // Get active sensors with parameter details
+        $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+            ->where('tbl_sensor.status', 'active')
+            ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+            ->select(
+                'tbl_sensor.parameter_name',
+                'tbl_parameter.parameter_label',
+                'tbl_sensor.sensor_unit'
             )
-                ->where('device_id', $deviceId)
-                ->whereIn('parameter_name', $parameters)
-                ->whereBetween('recorded_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                ->orderBy('recorded_at', 'asc')
-                ->get();
+            ->orderBy('tbl_sensor.id', 'asc')
+            ->get();
 
-            if ($data->isEmpty()) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'No data found for the selected date range',
-                    'device_id' => $deviceId,
-                    'device_category' => $device->device_category,
-                    'parameters' => $parameterInfo,
-                    'data' => []
-                ], 200);
-            }
+        if ($sensors->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No active sensors found for this device'
+            ], 404);
+        }
 
-            // Group data by timestamp more efficiently
-            $groupedData = [];
-            foreach ($data as $item) {
-                $timestamp = $item->timestamp_minute;
-                if (!isset($groupedData[$timestamp])) {
-                    $groupedData[$timestamp] = [
-                        'recorded_at' => $item->recorded_at,
-                        'values' => []
-                    ];
-                }
-                $groupedData[$timestamp]['values'][$item->parameter_name] = round(floatval($item->value), 2);
-            }
+        // Build parameter info and list
+        $parameterInfo = [];
+        $parameters = [];
+        foreach ($sensors as $sensor) {
+            $parameters[] = $sensor->parameter_name;
+            $parameterInfo[] = [
+                'parameter_name' => $sensor->parameter_name,
+                'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
+                'parameter_unit' => $sensor->sensor_unit ?? ''
+            ];
+        }
 
-            // Format data into table
-            $tableData = [];
-            $no = 1;
-            foreach ($groupedData as $timestamp => $group) {
-                $dateTime = Carbon::parse($group['recorded_at']);
-                $row = [
-                    'no' => $no++,
-                    'date' => $dateTime->format('Y-m-d'),
-                    'time' => $dateTime->format('H:i'),
-                    'recorded_at' => $dateTime->format('Y-m-d H:i:s')
-                ];
+        // Get data, convert Unix timestamp to human-readable minute format
+        $data = DataModel::select(
+            DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
+            'parameter_name',
+            'value',
+            'timestamp' // Keep original Unix timestamp for Carbon
+        )
+        ->where('device_id', $deviceId)
+        ->whereIn('parameter_name', $parameters)
+        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+        ->orderBy('timestamp', 'asc')
+        ->get();
 
-                // Add parameter values
-                foreach ($parameters as $parameter) {
-                    $row[$parameter] = $group['values'][$parameter] ?? null;
-                }
-
-                $tableData[] = $row;
-            }
-
+        if ($data->isEmpty()) {
             return response()->json([
                 'success' => true,
+                'message' => 'No data found for the selected date range',
                 'device_id' => $deviceId,
                 'device_category' => $device->device_category,
                 'parameters' => $parameterInfo,
-                'data' => $tableData,
-                'total_records' => count($tableData),
-                'date_range' => [
-                    'start' => $startDate,
-                    'end' => $endDate
-                ]
+                'data' => []
             ], 200);
-        } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $e->errors()
-            ], 422);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch report data: ' . $e->getMessage()
-            ], 500);
         }
+
+        // Group data by timestamp_minute
+        $groupedData = [];
+        foreach ($data as $item) {
+            $timestamp = $item->timestamp_minute;
+            if (!isset($groupedData[$timestamp])) {
+                $groupedData[$timestamp] = [
+                    'recorded_at' => $item->timestamp, // Unix timestamp
+                    'values' => []
+                ];
+            }
+            $groupedData[$timestamp]['values'][$item->parameter_name] = round(floatval($item->value), 2);
+        }
+
+        // Format data into table
+        $tableData = [];
+        $no = 1;
+        foreach ($groupedData as $timestamp => $group) {
+            $dateTime = Carbon::createFromTimestamp($group['recorded_at'], 'UTC')
+                ->setTimezone(config('app.timezone'));
+            $row = [
+                'no' => $no++,
+                'date' => $dateTime->format('Y-m-d'),
+                'time' => $dateTime->format('H:i'),
+                'recorded_at' => $dateTime->format('Y-m-d H:i:s')
+            ];
+
+            foreach ($parameters as $parameter) {
+                $row[$parameter] = $group['values'][$parameter] ?? null;
+            }
+
+            $tableData[] = $row;
+        }
+
+        return response()->json([
+            'success' => true,
+            'device_id' => $deviceId,
+            'device_category' => $device->device_category,
+            'parameters' => $parameterInfo,
+            'data' => $tableData,
+            'total_records' => count($tableData),
+            'date_range' => [
+                'start' => $startDate,
+                'end' => $endDate
+            ]
+        ], 200);
+
+    } catch (\Illuminate\Validation\ValidationException $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation failed',
+            'errors' => $e->errors()
+        ], 422);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch report data: ' . $e->getMessage()
+        ], 500);
     }
+}
 
 
 
@@ -1061,8 +1081,10 @@ class UserController extends Controller
                 ], 403);
             }
 
+            
             // Get report data
             $reportData = $this->getReportData($deviceId, $startDate, $endDate);
+
 
             if (!$reportData['success']) {
                 return response()->json($reportData, 404);
@@ -1298,18 +1320,23 @@ class UserController extends Controller
                 ];
             }
 
+            //ubah menjadi tanggal menjadi format unix
+            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+            $endDateUnix = Carbon::parse($endDate)->endOfDay()->timestamp;
+
             // Get data with optimized query - select specific columns and filter by parameters
             $data = DataModel::select(
-                DB::raw("DATE_FORMAT(recorded_at, '%Y-%m-%d %H:%i') as timestamp_minute"),
+                DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
                 'parameter_name',
                 'value',
-                'recorded_at'
+                'timestamp'
             )
                 ->where('device_id', $deviceId)
                 ->whereIn('parameter_name', $parameters)
-                ->whereBetween('recorded_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                ->orderBy('recorded_at', 'asc')
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->orderBy('timestamp', 'asc')
                 ->get();
+
 
             if ($data->isEmpty()) {
                 return [
@@ -1333,7 +1360,7 @@ class UserController extends Controller
                 $timestamp = $item->timestamp_minute;
                 if (!isset($groupedData[$timestamp])) {
                     $groupedData[$timestamp] = [
-                        'recorded_at' => $item->recorded_at,
+                        'recorded_at' => $item->timestamp,
                         'values' => []
                     ];
                 }
@@ -1344,7 +1371,8 @@ class UserController extends Controller
             $tableData = [];
             $no = 1;
             foreach ($groupedData as $timestamp => $group) {
-                $dateTime = Carbon::parse($group['recorded_at']);
+                $dateTime = Carbon::createFromTimestamp($group['recorded_at'], 'UTC')
+                    ->setTimezone(config('app.timezone'));
                 $row = [
                     'no' => $no++,
                     'date' => $dateTime->format('Y-m-d'),

@@ -934,7 +934,7 @@
                         // Period, Records, and Generated - distributed layout (left, center, right)
                         const periodText = `Period: ${currentReportData.date_range.start} to ${currentReportData.date_range.end}`;
                         const recordsText = `Records: ${currentReportData.total_records}`;
-                        const generatedText = `Generated: ${new Date().toLocaleString()}`;
+                        const generatedText = `Generated: {{ Date::now()->format('Y-m-d H:i:s') }}`;
                         
                         // Left - Period
                         doc.text(periodText, 48, yPos);

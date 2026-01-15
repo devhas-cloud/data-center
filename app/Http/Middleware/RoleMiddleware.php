@@ -14,9 +14,15 @@ class RoleMiddleware
      */
     public function handle($request, Closure $next, $role)
     {
+
         $user = Auth::user();
 
+        $timezone = session('timezone') ?? $user->timezone ?? 'UTC';
+
         if ($user && $user->role === $role) {
+            
+            config(['app.timezone' => $timezone]);
+            date_default_timezone_set($timezone);
             return $next($request);
         }
 

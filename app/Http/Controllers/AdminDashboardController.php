@@ -128,14 +128,14 @@ class AdminDashboardController extends Controller
                     ->first();
                 $latestData = DataModel::where('device_id', $deviceId)
                     ->where('parameter_name', $parameter->parameter_name)
-                    ->orderBy('recorded_at', 'desc')
+                    ->orderBy('timestamp', 'desc')
                     ->first();
 
                 return [
                     'parameter_label' => $parameter->parameter_label,
                     'parameter_name' => $sensor->parameter_name,
                     'latest_value' => $latestData ? $latestData->value : null,
-                    'recorded_at' => $latestData ? date('Y-m-d H:i', strtotime($latestData->recorded_at)) : null,
+                    'recorded_at' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s') : null,
                     'parameter_indicator_min' => $sensor->parameter_indicator_min,
                     'parameter_indicator_max' => $sensor->parameter_indicator_max,
                     'sensor_unit' => $sensor->sensor_unit,
@@ -165,12 +165,19 @@ class AdminDashboardController extends Controller
         $now = now();
         $startTime = $now->copy()->subHours(24); // 24 jam yang lalu
         $endTime = $now->copy(); // Waktu sekarang
+
+        //ubah menjadi unix timestamp
+
+        
+
+
         $data = DataModel::where('device_id', $deviceId)
             ->where('parameter_name', $parameter)
-            ->where('recorded_at', '>=', $startTime)
-            ->where('recorded_at', '<=', $endTime)
-            ->orderBy('recorded_at', 'asc')
+            ->where('timestamp', '>=', $startTime->timestamp)
+            ->where('timestamp', '<=', $endTime->timestamp)
+            ->orderBy('timestamp', 'asc')
             ->get();
+
 
         $labels = [];
         $values = [];
@@ -181,10 +188,12 @@ class AdminDashboardController extends Controller
             $gapTimeout = $device->device_gap_timeout ?? 1;
         }
 
+    
         foreach ($data as $item) {
-            $currentTime = \Carbon\Carbon::parse($item->recorded_at);
-
+             $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
+                ->setTimezone(config('app.timezone'));
             // Jika ada data sebelumnya, cek gap waktunya
+
             if ($previousTime !== null) {
                 $diffInMinutes = $previousTime->diffInMinutes($currentTime);
 
@@ -209,9 +218,10 @@ class AdminDashboardController extends Controller
             'labels' => $labels,
             'values' => $values,
             'parameter_label' => $sensor ? $sensor->parameter->parameter_label : $sensor->parameter_name,
-            'unit' => $unit
+            'unit' => $unit,
         ]);
     }
+
 
     public function barChartData(Request $request, $deviceId)
     {
@@ -237,9 +247,9 @@ class AdminDashboardController extends Controller
         // Aggregate data hourly
         $data = DataModel::where('device_id', $deviceId)
             ->where('parameter_name', $parameter)
-            ->where('recorded_at', '>=', $startTime)
-            ->where('recorded_at', '<=', $endTime)
-            ->select(DB::raw('DATE_FORMAT(recorded_at, "%Y-%m-%d %H:00") as hour'), DB::raw('AVG(value) as avg_value'))
+            ->where('timestamp', '>=', $startTime->timestamp)
+            ->where('timestamp', '<=', $endTime->timestamp)
+            ->select(DB::raw('DATE_FORMAT(FROM_UNIXTIME(timestamp), "%Y-%m-%d %H:00") as hour'), DB::raw('AVG(value) as avg_value'))
             ->groupBy('hour')
             ->orderBy('hour', 'asc')
             ->get();
@@ -273,7 +283,7 @@ class AdminDashboardController extends Controller
                              AVG(CASE WHEN parameter_name = "wspeed" THEN value END) as wspeed,
                              AVG(CASE WHEN parameter_name = "wdir" THEN value END) as wdir')
                 ->whereIn('parameter_name', ['wspeed', 'wdir'])
-                ->where('recorded_at', '>=', $startTime)
+                ->where('timestamp', '>=', $startTime->timestamp)
                 ->where('device_id', $deviceId)
                 ->groupByRaw('FROM_UNIXTIME(timestamp, "%Y-%m-%d %H:%i")')
                 ->orderBy('date', 'asc')
@@ -314,6 +324,10 @@ class AdminDashboardController extends Controller
             $startDate = $request->input('start_date');
             $endDate = $request->input('end_date');
 
+            // ubah format tanggal ke unix timestamp
+            $startDate = Carbon::parse($startDate)->timestamp;
+            $endDate = Carbon::parse($endDate)->timestamp;
+
             if (!$parameterName || !$startDate || !$endDate) {
                 return response()->json([
                     'labels' => [],
@@ -326,8 +340,8 @@ class AdminDashboardController extends Controller
             // Query data tanpa aggregation - ambil semua data points
             $data = DataModel::where('device_id', $deviceId)
                 ->where('parameter_name', $parameterName)
-                ->whereBetween('recorded_at', [$startDate, $endDate])
-                ->orderBy('recorded_at', 'asc')
+                ->whereBetween('timestamp', [$startDate, $endDate])
+                ->orderBy('timestamp', 'asc')
                 ->get();
             // Get sensor unit
             $sensor = SensorModel::where('device_id', $deviceId)
@@ -345,7 +359,8 @@ class AdminDashboardController extends Controller
             }
 
             foreach ($data as $item) {
-                $currentTime = \Carbon\Carbon::parse($item->recorded_at);
+                $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
+                ->setTimezone(config('app.timezone'));
 
                 // Jika ada data sebelumnya, cek gap waktunya
                 if ($previousTime !== null) {
@@ -377,6 +392,7 @@ class AdminDashboardController extends Controller
             return response()->json([
                 'labels' => [],
                 'values' => [],
+                'parameter_label' => '',
                 'unit' => '',
                 'error' => 'Failed to retrieve data: ' . $e->getMessage()
             ], 500);
