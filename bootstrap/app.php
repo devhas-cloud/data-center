@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
         //
         $middleware->alias([
         'role' => \App\Http\Middleware\RoleMiddleware::class,
+        'single.session' => \App\Http\Middleware\EnsureSingleSession::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

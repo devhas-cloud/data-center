@@ -321,7 +321,7 @@
                                     <i class="bi bi-lock"></i>
                                 </span>
                                 <input type="password" class="form-control @error('password') is-invalid @enderror"
-                                    id="password" name="password" placeholder="••••••••" required
+                                    id="password" name="password" placeholder="Password" required
                                     autocomplete="current-password">
                                 <button class="btn btn-outline-secondary" type="button" id="togglePassword">
                                     <i class="bi bi-eye"></i>

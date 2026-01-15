@@ -18,72 +18,80 @@ use Carbon\Carbon;
 class AuthController extends Controller
 {
     public function login(Request $request)
-    {
-        // Rate limiting: max 5 attempts per minute per IP
-        $key = 'login-attempts:' . $request->ip();
-        
-        if (RateLimiter::tooManyAttempts($key, 5)) {
-            $seconds = RateLimiter::availableIn($key);
-            throw ValidationException::withMessages([
-                'username' => ['Too many login attempts. Please try again in ' . ceil($seconds / 60) . ' minutes.'],
-            ]);
-        }
-
-        $credentials = $request->validate([
-            'username' => 'required|string|max:255',
-            'password' => 'required|string'
+{
+    // Rate limiting: max 5 attempts per minute per IP
+    $key = 'login-attempts:' . $request->ip();
+    
+    if (RateLimiter::tooManyAttempts($key, 5)) {
+        $seconds = RateLimiter::availableIn($key);
+        throw ValidationException::withMessages([
+            'username' => ['Too many login attempts. Please try again in ' . ceil($seconds / 60) . ' minutes.'],
         ]);
+    }
 
-        // Sanitize username input
-        $credentials['username'] = strip_tags(trim($credentials['username']));
+    // Validate input
+    $credentials = $request->validate([
+        'username' => 'required|string|max:255',
+        'password' => 'required|string'
+    ]);
 
-        if (Auth::attempt($credentials, $request->filled('remember'))) {
-            $request->session()->regenerate();
-            
-            // Set user timezone if provided
-            $timezone = $request->timezone ?? 'UTC';
+    // Sanitize username
+    $credentials['username'] = strip_tags(trim($credentials['username']));
 
-            // Clear rate limiter on successful login
-            RateLimiter::clear($key);
-            
-            // Log successful login
-            Log::info('User logged in successfully', [
-                'username' => $credentials['username'],
-                'ip' => $request->ip(),
-                'user_agent' => $request->userAgent(),
-                'timezone' => $timezone
-            ]);
+    if (Auth::attempt($credentials, $request->filled('remember'))) {
+        $request->session()->regenerate();
 
-            //tambah ke session
-            session(['timezone' => $timezone]);
+        $user = Auth::user();
 
-            //update timezone in user profile
-            $user = Auth::user();
-            $user->timezone = $timezone;
-            $user->save();
+        // ===========================
+        // HAPUS SESSION LAMA USER
+        // ===========================
+        DB::table('sessions')
+            ->where('user_id', $user->id)
+            ->where('id', '!=', session()->getId())
+            ->delete();
 
-            if (Auth::user()->role === 'admin') {
-                return redirect()->intended('/admin/home');
-            } else {
-                return redirect()->intended('/user/home');
-            }
-        }
-        
-        // Increment rate limiter
-        RateLimiter::hit($key, 60);
-        
-        // Log failed login attempt
-        Log::warning('Failed login attempt', [
+        // Set user timezone if provided
+        $timezone = $request->timezone ?? 'UTC';
+        session(['timezone' => $timezone]);
+        $user->timezone = $timezone;
+        $user->save();
+
+        // Clear rate limiter
+        RateLimiter::clear($key);
+
+        // Log successful login
+        Log::info('User logged in successfully', [
             'username' => $credentials['username'],
             'ip' => $request->ip(),
-            'user_agent' => $request->userAgent()
+            'user_agent' => $request->userAgent(),
+            'timezone' => $timezone
         ]);
-        
-        // Generic error message to prevent user enumeration
-        return back()->withErrors([
-            'username' => 'The provided credentials do not match our records.',
-        ])->onlyInput('username');
+
+        // Redirect based on role
+        if ($user->role === 'admin') {
+            return redirect()->intended('/admin/home');
+        } else {
+            return redirect()->intended('/user/home');
+        }
     }
+
+    // Increment rate limiter
+    RateLimiter::hit($key, 60);
+
+    // Log failed login attempt
+    Log::warning('Failed login attempt', [
+        'username' => $credentials['username'],
+        'ip' => $request->ip(),
+        'user_agent' => $request->userAgent()
+    ]);
+
+    // Generic error message
+    return back()->withErrors([
+        'username' => 'The provided credentials do not match our records.',
+    ])->onlyInput('username');
+}
+
 
     public function logout(Request $request)
     {

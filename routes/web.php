@@ -123,7 +123,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
 });
 
-Route::middleware(['auth', 'role:user'])->group(function () {
+Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
 
     // User Home
     Route::get('/user/home', [UserController::class, 'home'])->name('user.home');
