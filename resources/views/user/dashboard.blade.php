@@ -282,11 +282,175 @@
 
             // ==================== DEVICE SELECTOR ====================
             let currentSelectedDevice = null;
+            let activeDeviceRequestId = 0;
+            let isSwitchingDevice = false;
+            const endpointControllers = {
+                map: null,
+                progress: null,
+                line: null,
+                bar: null,
+                historical: null,
+                windRose: null,
+                reference: null,
+                referenceBar: null
+            };
 
             const deviceSelector = document.getElementById('deviceSelector');
             const deviceSelectorToggle = document.getElementById('deviceSelectorToggle');
             const deviceOptions = document.querySelectorAll('.device-option');
             const deviceNameElements = document.querySelectorAll('.device-name');
+
+            function isStaleRequest(requestId) {
+                return requestId !== null && requestId !== undefined && requestId !== activeDeviceRequestId;
+            }
+
+            function createEndpointSignal(endpointKey) {
+                if (endpointControllers[endpointKey]) {
+                    endpointControllers[endpointKey].abort();
+                }
+
+                const controller = new AbortController();
+                endpointControllers[endpointKey] = controller;
+                return controller.signal;
+            }
+
+            function setLoaderLoading(loaderId, message = 'Loading data...') {
+                const loader = document.getElementById(loaderId);
+                if (!loader) return;
+
+                loader.innerHTML = `
+                    <div class="text-center text-muted py-5">
+                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        ${message}
+                    </div>
+                `;
+                loader.style.display = 'block';
+            }
+
+            function setLoaderNoData(loaderId, message = 'No data available') {
+                const loader = document.getElementById(loaderId);
+                if (!loader) return;
+
+                loader.innerHTML = `
+                    <div class="text-center text-muted py-5">
+                        <i class="bi bi-inbox me-2"></i>${message}
+                    </div>
+                `;
+                loader.style.display = 'block';
+            }
+
+            function setDeviceLoadingState(isLoading, selectedDevice = null) {
+                isSwitchingDevice = isLoading;
+
+                if (deviceSelectorToggle) {
+                    deviceSelectorToggle.style.pointerEvents = isLoading ? 'none' : 'auto';
+                    deviceSelectorToggle.style.opacity = isLoading ? '0.75' : '1';
+                }
+
+                if (isLoading) {
+                    const loadingLabel = selectedDevice ? `Loading ${selectedDevice}...` : 'Loading...';
+                    deviceNameElements.forEach(nameEl => {
+                        nameEl.textContent = loadingLabel;
+                    });
+
+                    const latestDataContainer = document.getElementById('latestDataProgressBars');
+                    if (latestDataContainer) {
+                        latestDataContainer.innerHTML = `
+                            <div class="text-center text-muted py-5">
+                                <div class="spinner-border spinner-border-sm me-2" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                Loading device data...
+                            </div>
+                        `;
+                    }
+
+                    const lineLoader = document.getElementById('lineChartLoader');
+                    const lineCanvas = document.getElementById('sensorLineChart');
+                    if (lineLoader && lineCanvas) {
+                        setLoaderLoading('lineChartLoader', 'Loading chart data...');
+                        lineCanvas.style.display = 'none';
+                    }
+
+                    const barLoader = document.getElementById('barChartLoader');
+                    const barCanvas = document.getElementById('sensorBarChart');
+                    if (barLoader && barCanvas) {
+                        setLoaderLoading('barChartLoader', 'Loading chart data...');
+                        barCanvas.style.display = 'none';
+                    }
+                }
+            }
+
+            async function handleDeviceChange(selectedDevice) {
+                if (!selectedDevice || (isSwitchingDevice && selectedDevice === currentDeviceId)) {
+                    return;
+                }
+
+                const requestId = ++activeDeviceRequestId;
+                setDeviceLoadingState(true, selectedDevice);
+
+                currentSelectedDevice = selectedDevice;
+                currentDeviceId = selectedDevice;
+
+                if (deviceSelector) {
+                    deviceSelector.classList.remove('show');
+                }
+                if (mobileDeviceSelector) {
+                    mobileDeviceSelector.classList.remove('show');
+                }
+
+                parameters = [];
+                currentSelectedParameter = null;
+                currentSelectedBarParameter = null;
+                currentHistoricalParameter = null;
+
+                try {
+                    const [progressResult] = await Promise.allSettled([
+                        loadProgressBarData(selectedDevice, requestId),
+                        loadMapData(selectedDevice, requestId)
+                    ]);
+
+                    if (isStaleRequest(requestId)) {
+                        return;
+                    }
+
+                    if (progressResult.status === 'fulfilled' && parameters.length > 0) {
+                        loadLineChartParameters();
+                        loadBarChartParameters();
+                        loadHistoricalChartParameters();
+                        checkAndShowWindRose(requestId);
+                    } else {
+                        setLoaderNoData('lineChartLoader', 'No data available');
+                        setLoaderNoData('barChartLoader', 'No data available');
+
+                        const lineCanvas = document.getElementById('sensorLineChart');
+                        const barCanvas = document.getElementById('sensorBarChart');
+                        if (lineCanvas) lineCanvas.style.display = 'none';
+                        if (barCanvas) barCanvas.style.display = 'none';
+
+                        const historicalLoader = document.getElementById('historicalChartLoader');
+                        const historicalCanvas = document.getElementById('historicalLineChart');
+                        if (historicalCanvas) historicalCanvas.style.display = 'none';
+                        if (historicalLoader) {
+                            setLoaderNoData('historicalChartLoader', 'No data available');
+                        }
+
+                        const windRoseRow = document.getElementById('windRoseRow');
+                        if (windRoseRow) windRoseRow.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error updating device data:', error);
+                } finally {
+                    if (!isStaleRequest(requestId)) {
+                        setDeviceLoadingState(false);
+                        deviceNameElements.forEach(nameEl => {
+                            nameEl.textContent = currentDeviceId || 'Select Device';
+                        });
+                    }
+                }
+            }
 
             // Get initial selected device
             const initialActiveOption = document.querySelector('.device-option.active');
@@ -322,55 +486,14 @@
 
             // Handle device selection change (Desktop & Mobile)
             deviceOptions.forEach(option => {
-                option.addEventListener('click', function() {
+                option.addEventListener('click', async function() {
                     const selectedDevice = this.getAttribute('data-value');
 
                     // Update active state
                     deviceOptions.forEach(opt => opt.classList.remove('active'));
                     this.classList.add('active');
 
-                    // Update device name in toggle
-                    deviceNameElements.forEach(nameEl => {
-                        nameEl.textContent = selectedDevice;
-                    });
-
-                    // Close dropdowns
-                    if (deviceSelector) {
-                        deviceSelector.classList.remove('show');
-                    }
-                    if (mobileDeviceSelector) {
-                        mobileDeviceSelector.classList.remove('show');
-                    }
-
-                    // Update current selected device
-                    currentSelectedDevice = selectedDevice;
-                    currentDeviceId = selectedDevice;
-
-                    // Reset parameters cache and current selections
-                    parameters = [];
-                    currentSelectedParameter = null;
-                    currentSelectedBarParameter = null;
-                    currentHistoricalParameter = null;
-
-                    // Load progress bar data first, then update charts
-                    loadProgressBarData(selectedDevice)
-                        .then(() => {
-                            // Update map with fresh data
-                            loadMapData(selectedDevice);
-
-                            // Update chart parameters after data is loaded
-                            if (parameters.length > 0) {
-                                loadLineChartParameters();
-                                loadBarChartParameters();
-                                loadHistoricalChartParameters();
-
-                                // Check and update wind rose
-                                checkAndShowWindRose();
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Error updating device data:', error);
-                        });
+                    await handleDeviceChange(selectedDevice);
                 });
             });
 
@@ -417,17 +540,19 @@
                 loadDeviceMarker(currentDeviceId);
             }
 
-            function loadMapData(deviceId) {
-                if (!deviceId) return;
-                loadDeviceMarker(deviceId);
+            function loadMapData(deviceId, requestId = null) {
+                if (!deviceId) return Promise.resolve();
+                return loadDeviceMarker(deviceId, requestId);
             }
 
-            function loadDeviceMarker(deviceId) {
-                if (!deviceId) return;
+            function loadDeviceMarker(deviceId, requestId = null) {
+                if (!deviceId) return Promise.resolve();
+                const signal = createEndpointSignal('map');
 
                 // Fetch device data with fresh status
-                fetch(`/user/maps-dashboard/${deviceId}`, {
+                return fetch(`/user/maps-dashboard/${deviceId}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -441,6 +566,10 @@
                         return response.json();
                     })
                     .then(data => {
+                        if (isStaleRequest(requestId)) {
+                            return;
+                        }
+
                         // Clear existing markers
                         mapMarkers.forEach(marker => map.removeLayer(marker));
                         mapMarkers = [];
@@ -498,6 +627,9 @@
                         map.setView([lat, lng], 12);
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading device location:', error);
                     });
             }
@@ -515,9 +647,11 @@
                 return Promise.resolve();
             }
 
-            function loadProgressBarData(deviceId) {
+            function loadProgressBarData(deviceId, requestId = null) {
+                const signal = createEndpointSignal('progress');
                 return fetch(`/user/progress-bar/${deviceId}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -531,12 +665,19 @@
                         return response.json();
                     })
                     .then(data => {
+                        if (isStaleRequest(requestId)) {
+                            return data;
+                        }
+
                         console.log('Progress bar data received:', data);
                         parameters = data; // Store parameters globally
                         renderProgressBars(data);
                         return data; // Return data for chaining
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return [];
+                        }
                         console.error('Error loading progress bar data:', error);
                         throw error;
                     });
@@ -545,6 +686,15 @@
             function renderProgressBars(apiData) {
                 const container = document.getElementById('latestDataProgressBars');
                 container.innerHTML = '';
+
+                if (!apiData || apiData.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-muted py-5">
+                            <i class="bi bi-inbox me-2"></i>No data available
+                        </div>
+                    `;
+                    return;
+                }
 
 
                 apiData.forEach((item, index) => {
@@ -791,13 +941,16 @@
                     return;
                 }
 
+                const signal = createEndpointSignal('line');
+
                 // Show loader
-                document.getElementById('lineChartLoader').style.display = 'block';
+                setLoaderLoading('lineChartLoader', 'Loading chart data...');
                 document.getElementById('sensorLineChart').style.display = 'none';
 
                 // Fetch chart data from API (rolling 24 hours from current time)
                 fetch(`/user/line-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -806,6 +959,13 @@
                     })
                     .then(response => response.json())
                     .then(data => {
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                            0) {
+                            setLoaderNoData('lineChartLoader', 'No data available');
+                            document.getElementById('sensorLineChart').style.display = 'none';
+                            return;
+                        }
+
                         // Hide loader
                         document.getElementById('lineChartLoader').style.display = 'none';
                         document.getElementById('sensorLineChart').style.display = 'block';
@@ -848,9 +1008,12 @@
                         }
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading line chart data:', error);
-                        document.getElementById('lineChartLoader').style.display = 'none';
-                        document.getElementById('sensorLineChart').style.display = 'block';
+                        setLoaderNoData('lineChartLoader', 'No data available');
+                        document.getElementById('sensorLineChart').style.display = 'none';
                     });
             }
 
@@ -860,9 +1023,12 @@
                     return;
                 }
 
+                const signal = createEndpointSignal('line');
+
                 // Fetch chart data from API without showing loader
                 fetch(`/user/line-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -990,6 +1156,9 @@
                         }
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading line chart data (smooth):', error);
                     });
             }
@@ -1201,13 +1370,16 @@
                     return;
                 }
 
+                const signal = createEndpointSignal('bar');
+
                 // Show loader
-                document.getElementById('barChartLoader').style.display = 'block';
+                setLoaderLoading('barChartLoader', 'Loading chart data...');
                 document.getElementById('sensorBarChart').style.display = 'none';
 
                 // Fetch chart data from API
                 fetch(`/user/bar-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -1216,6 +1388,13 @@
                     })
                     .then(response => response.json())
                     .then(data => {
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                            0) {
+                            setLoaderNoData('barChartLoader', 'No data available');
+                            document.getElementById('sensorBarChart').style.display = 'none';
+                            return;
+                        }
+
                         // Hide loader
                         document.getElementById('barChartLoader').style.display = 'none';
                         document.getElementById('sensorBarChart').style.display = 'block';
@@ -1252,9 +1431,12 @@
                         }
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading bar chart data:', error);
-                        document.getElementById('barChartLoader').style.display = 'none';
-                        document.getElementById('sensorBarChart').style.display = 'block';
+                        setLoaderNoData('barChartLoader', 'No data available');
+                        document.getElementById('sensorBarChart').style.display = 'none';
                     });
             }
 
@@ -1264,9 +1446,12 @@
                     return;
                 }
 
+                const signal = createEndpointSignal('bar');
+
                 // Fetch chart data from API without showing loader
                 fetch(`/user/bar-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}`, {
                         method: 'GET',
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -1371,6 +1556,9 @@
                         }
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading bar chart data (smooth):', error);
                     });
             }
@@ -1471,7 +1659,7 @@
                 return directions[index];
             }
 
-            function checkAndShowWindRose() {
+            function checkAndShowWindRose(requestId = null) {
                 // Check if Wind Direction parameter exists
                 const hasWindDirection = parameters.some(param =>
                     param.parameter_name && param.parameter_name.toLowerCase().includes('wdir')
@@ -1479,22 +1667,29 @@
 
                 if (hasWindDirection) {
                     document.getElementById('windRoseRow').style.display = 'block';
-                    renderWindRose();
+                    renderWindRose(requestId);
                 } else {
                     document.getElementById('windRoseRow').style.display = 'none';
                 }
             }
 
-            async function renderWindRose() {
+            async function renderWindRose(requestId = null) {
                 if (!currentDeviceId) return;
+                const signal = createEndpointSignal('windRose');
 
                 // Show loader
-                document.getElementById('windRoseLoader').style.display = 'block';
+                setLoaderLoading('windRoseLoader', 'Loading wind rose data...');
                 document.getElementById('windRoseChart').style.display = 'none';
 
                 try {
-                    const res = await fetch(`/user/wind-rose-data/${currentDeviceId}`);
+                    const res = await fetch(`/user/wind-rose-data/${currentDeviceId}`, {
+                        signal
+                    });
                     const data = await res.json();
+
+                    if (isStaleRequest(requestId)) {
+                        return;
+                    }
 
                     // Hide loader
                     document.getElementById('windRoseLoader').style.display = 'none';
@@ -1510,6 +1705,14 @@
                                 dir: degToCompass16(dir),
                                 speed: spd
                             });
+                        }
+
+                        if (rawData.length === 0) {
+                            document.getElementById('windRoseLoader').style.display = 'none';
+                            document.getElementById('windRoseChart').style.display = 'block';
+                            document.getElementById('windRoseChart').innerHTML =
+                                '<div class="alert alert-info text-center mb-0">No data available</div>';
+                            return;
                         }
                     }
 
@@ -1571,6 +1774,9 @@
                     Plotly.newPlot("windRoseChart", [trace], layout);
 
                 } catch (e) {
+                    if (e.name === 'AbortError') {
+                        return;
+                    }
                     console.error("Error rendering wind rose:", e);
                     document.getElementById('windRoseLoader').style.display = 'none';
                     document.getElementById('windRoseChart').style.display = 'block';
@@ -1855,6 +2061,8 @@
                     return;
                 }
 
+                const signal = createEndpointSignal('historical');
+
                 const startDate = $('#historicalChartStartDate').val();
                 const endDate = $('#historicalChartEndDate').val();
 
@@ -1876,12 +2084,13 @@
                 });
 
                 // Show loader
-                document.getElementById('historicalChartLoader').style.display = 'block';
+                setLoaderLoading('historicalChartLoader', 'Loading chart data...');
                 document.getElementById('historicalLineChart').style.display = 'none';
 
                 // Fetch chart data from API
                 fetch(`/user/historical-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`, {
                         method: 'GET',
+                    signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -1890,6 +2099,13 @@
                     })
                     .then(response => response.json())
                     .then(data => {
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                            0) {
+                            setLoaderNoData('historicalChartLoader', 'No data available');
+                            document.getElementById('historicalLineChart').style.display = 'none';
+                            return;
+                        }
+
                         // Hide loader
                         document.getElementById('historicalChartLoader').style.display = 'none';
                         document.getElementById('historicalLineChart').style.display = 'block';
@@ -1916,10 +2132,12 @@
                         }
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading historical chart data:', error);
-                        document.getElementById('historicalChartLoader').style.display = 'none';
-                        document.getElementById('historicalLineChart').style.display = 'block';
-                        alert('Failed to load historical chart data. Please try again.');
+                        setLoaderNoData('historicalChartLoader', 'No data available');
+                        document.getElementById('historicalLineChart').style.display = 'none';
                     });
             }
 
@@ -1974,6 +2192,7 @@
                 // Fetch data using progress bar API (contains parameter info)
                 fetch(`/user/progress-bar/${currentDeviceId}`, {
                         method: 'GET',
+                    signal: createEndpointSignal('reference'),
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -1990,6 +2209,9 @@
                         renderReferenceTable(data, modalBody);
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading reference data:', error);
                         modalBody.innerHTML =
                             '<div class="alert alert-danger">Failed to load reference data.</div>';
@@ -2017,6 +2239,7 @@
                 // Fetch data using progress bar API
                 fetch(`/user/progress-bar/${currentDeviceId}`, {
                         method: 'GET',
+                    signal: createEndpointSignal('referenceBar'),
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -2033,6 +2256,9 @@
                         renderReferenceTable(data, modalBody);
                     })
                     .catch(error => {
+                        if (error.name === 'AbortError') {
+                            return;
+                        }
                         console.error('Error loading reference data:', error);
                         modalBody.innerHTML =
                             '<div class="alert alert-danger">Failed to load reference data.</div>';
@@ -2141,11 +2367,17 @@
             // Auto refresh data every 60 seconds
             setInterval(function() {
                 if (currentDeviceId) {
+                    if (isSwitchingDevice) {
+                        return;
+                    }
+
+                    const requestId = activeDeviceRequestId;
+
                     // Refresh map with fresh device status
-                    loadMapData(currentDeviceId);
+                    loadMapData(currentDeviceId, requestId);
 
                     // Refresh progress bars
-                    loadProgressBarData(currentDeviceId);
+                    loadProgressBarData(currentDeviceId, requestId);
 
                     // Refresh line chart if parameter is selected (smooth update)
                     if (currentSelectedParameter) {
@@ -2160,7 +2392,7 @@
                     // Refresh wind rose if visible
                     const windRoseRow = document.getElementById('windRoseRow');
                     if (windRoseRow && windRoseRow.style.display !== 'none') {
-                        renderWindRose();
+                        renderWindRose(requestId);
                     }
                 }
             }, 60000);

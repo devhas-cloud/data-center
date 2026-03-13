@@ -81,7 +81,7 @@ class UserController extends Controller
                     'device_name' => $device->device_name,
                     'latitude' => $device->latitude,
                     'longitude' => $device->longitude,
-                    'status' => $this->DeviceStatus($device->device_ip),
+                    'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
                     'sensors' => $sensorsData,
                 ];
             }
@@ -107,17 +107,29 @@ class UserController extends Controller
         return $devices;
     }
 
-    public function DeviceStatus($deviceIp)
+    public function DeviceStatus($deviceId, $gapTimeout = 3)
     {
         // lakukan ping ke IP address tersebut
-        $ipAddress = $deviceIp;
-        $pingResult = exec("ping -c 1 " . escapeshellarg($ipAddress), $output, $status);
-        if ($status === 0) {
-            $statusMessage = "Online";
-        } else {
-            $statusMessage = "Offline";
+        // $ipAddress = $deviceIp;
+        // $pingResult = exec("ping -c 1 " . escapeshellarg($ipAddress), $output, $status);
+        // if ($status === 0) {
+        //     $statusMessage = "Online";
+        // } else {
+        //     $statusMessage = "Offline";
+        // }
+        # Perbaiki metode pengecekan status dimana jika data terakhir lebih dari 6 menit yang lalu, maka dianggap offline
+        $latestData = DataModel::where('device_id', $deviceId)->orderBy('timestamp', 'desc')->first();
+        if (!$latestData) {
+            return "Offline";
         }
-        return $statusMessage;
+        $latestTimestamp = Carbon::createFromTimestamp($latestData->timestamp);
+        $now = Carbon::now();
+        $diffInMinutes = $latestTimestamp->diffInMinutes($now);
+        if ($diffInMinutes > $gapTimeout) {
+            return "Offline";
+        } else {
+            return "Online";
+        }
     }
 
 
@@ -147,7 +159,7 @@ class UserController extends Controller
                             'location' => $device->location,
                             'latitude' => $device->latitude,
                             'longitude' => $device->longitude,
-                            'status' => $this->DeviceStatus($device->device_ip),
+                            'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
                         ];
                     })->toArray(),
                 ];
@@ -171,7 +183,7 @@ class UserController extends Controller
             'device_category' => $device->device_category,
             'latitude' => $device->latitude,
             'longitude' => $device->longitude,
-            'status' => $this->DeviceStatus($device->device_ip),
+            'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
 
         ], 200);
     }
@@ -508,7 +520,7 @@ class UserController extends Controller
         $dataDevice = [
             'device_id' => $device->device_id,
             'device_name' => $device->device_name,
-            'device_status' => $this->DeviceStatus($device->device_ip),
+            'device_status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
             'device_last_update_data' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i') : 'No data',
             'device_category' => $device->device_category,
             'device_location' => $device->device_location,
