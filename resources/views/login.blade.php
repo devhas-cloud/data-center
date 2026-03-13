@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - @yield('title', 'Sistem Anda')</title>
+    <title>Login - Data Center</title>
 
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -14,17 +14,25 @@
 
     <!-- Custom CSS -->
     <style>
+        :root {
+            --primary-gradient: linear-gradient(90deg, #FF8A1A 0%, #01B3BC 20%, #292A49 100%);
+        }
+
         body {
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             background-color: #f8f9fa;
+            overflow-x: hidden;
+            /* Mencegah scroll horizontal */
         }
 
         /* Header Styles */
         .navbar-custom {
-            background: linear-gradient(90deg, #FF8A1A 0%, #01B3BC 20%, #292A49 100%);
+            background: var(--primary-gradient);
             box-shadow: 0 1px 1px rgba(0, 0, 0, .1);
+            z-index: 1030;
+            /* Pastikan navbar di atas */
         }
 
         .navbar-brand {
@@ -37,73 +45,90 @@
             transform: scale(1.05);
         }
 
-        /* Main Content */
+        /* Main Content Wrapper - Grid Bootstrap */
         .main-container {
             flex: 1;
             display: flex;
-            min-height: calc(100vh - 112px);
+            width: 100%;
+            position: relative;
         }
 
-        /* Banner Section */
+        /* Banner Section (Left Side) */
         .banner-section {
-            flex: 1;
             position: relative;
             overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            text-align: center;
+            /* Penting agar gambar tidak keluar container */
+            min-height: 500px;
+            display: none;
+            /* Hidden default on mobile */
         }
 
+        /* Tampilkan banner hanya di layar besar (Desktop) */
+        @media (min-width: 992px) {
+            .banner-section {
+                display: block;
+                flex: 1;
+                min-height: auto;
+            }
+        }
+
+        /* Slide Container */
         .banner-slide {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 3rem;
             opacity: 0;
-            transition: opacity 1s ease-in-out;
-            background-size: cover;
-            background-position: center;
+            transition: opacity 1.5s ease-in-out;
+            /* Transisi fade lebih halus */
+            z-index: 1;
         }
 
         .banner-slide.active {
             opacity: 1;
+            z-index: 2;
         }
 
-        .banner-slide-1 {
-            background: linear-gradient(135deg, rgba(41, 42, 73, 0.9), rgba(1, 179, 188, 0.8)),
-                url('https://picsum.photos/seed/banner1/1200/800.jpg');
+        /* Gambar di dalam slide */
+        .banner-slide img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            /* Kunci utama: Gambar memenuhi area tanpa gepeng/distorsi */
+            object-position: center;
+            display: block;
         }
 
-        .banner-slide-2 {
-            background: linear-gradient(135deg, rgba(255, 138, 26, 0.9), rgba(41, 42, 73, 0.8)),
-                url('https://picsum.photos/seed/banner2/1200/800.jpg');
+        /* Overlay gelap transparan agar teks (jika ada) atau gambar terlihat lebih elegan */
+        .banner-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3));
+            z-index: 3;
+            pointer-events: none;
         }
 
-        .banner-slide-3 {
-            background: linear-gradient(135deg, rgba(1, 179, 188, 0.9), rgba(255, 138, 26, 0.8)),
-                url('https://picsum.photos/seed/banner3/1200/800.jpg');
+        
+        /* Banner Content (Teks di atas banner) */
+        .banner-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 4;
+            width: 80%;
+            color: white;
+            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.6);
         }
 
         .banner-content h1 {
             font-weight: 700;
             margin-bottom: 1rem;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
             animation: fadeInDown 0.8s ease;
-        }
-
-        .banner-content p {
-            animation: fadeInUp 0.8s ease 0.2s both;
-        }
-
-        .banner-content .mt-4 {
-            animation: fadeIn 1s ease 0.4s both;
         }
 
         @keyframes fadeInDown {
@@ -111,45 +136,98 @@
                 opacity: 0;
                 transform: translateY(-20px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
             }
         }
 
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
+        /* Login Section (Right Side) */
+        .login-section {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+            background-color: #E9E9E9;
+            z-index: 5;
+            /* Di atas banner jika tumpang tindih di mobile */
+            width: 100%;
+            min-height: 100vh;
+        }
+
+        /* Di Desktop, sesuaikan ukuran */
+        @media (min-width: 992px) {
+            .login-section {
+                flex: 0 0 auto;
+                width: auto;
+                min-height: auto;
+                max-width: 500px;
+                padding: 2rem;
             }
         }
 
         /* Login Card */
         .login-card {
             width: 100%;
-            max-width: 400px;
             border: none;
             box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+            border-radius: 10px;
+            overflow: hidden;
+            background: white;
+            animation: fadeInUp 0.8s ease;
         }
 
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #eee;
+            padding: 1.5rem;
+        }
+
+        .card-body {
+            padding: 2rem;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Form Elements */
         .form-control:focus {
             border-color: #01B3BC;
             box-shadow: 0 0 0 0.25rem rgba(1, 179, 188, 0.25);
         }
 
+        .input-group-text {
+            background-color: #f8f9fa;
+            border-color: #ced4da;
+            color: #6c757d;
+        }
+
+        /* Buttons */
         .btn-primary-custom {
-            background: var(--bs-primary-gradient);
+            background: linear-gradient(90deg, #01B3BC 0%, #FF8A1A 100%);
+            /* Gradient cantik */
             border: none;
             padding: 0.75rem;
             font-weight: 500;
             transition: all 0.3s ease;
+            color: white;
         }
 
         .btn-primary-custom:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(1, 179, 188, 0.3);
+            box-shadow: 0 4px 12px rgba(1, 179, 188, 0.4);
+            color: white;
         }
 
         .btn-forgot-password {
@@ -172,25 +250,11 @@
 
         /* Footer */
         .footer-custom {
-            background: linear-gradient(90deg, #FF8A1A 0%, #01B3BC 20%, #292A49 100%);
+            background: var(--primary-gradient);
             color: white;
-            padding: 0.5rem 0;
+            padding: 0.8rem 0;
             margin-top: auto;
-        }
-
-        /* Responsive */
-        @media (max-width: 992px) {
-            .main-container {
-                flex-direction: column;
-            }
-
-            .banner-section {
-                min-height: 300px;
-            }
-
-            .login-section {
-                padding: 2rem 1rem;
-            }
+            font-size: 0.9rem;
         }
 
         /* Loading spinner */
@@ -203,106 +267,83 @@
 
 <body>
     <!-- Header using Bootstrap Navbar -->
-    <nav class="navbar navbar-expand-lg navbar-custom" style="padding: 1px 0;">
+    <nav class="navbar navbar-expand-lg navbar-custom" style="padding: 5px 0;">
         <div class="container-fluid">
-            <a class="align-items-center" href="{{ url('/') }}">
-                <img src="{{ asset('assets/img/icon.webp') }}" alt="Logo" height="60" class="d-inline-block align-text-top">
+            <a class="navbar-brand align-items-center d-flex" href="{{ url('/') }}">
+                <!-- Ganti src dengan asset icon Anda -->
+                <img src="{{ asset('assets/img/icon.webp') }}" alt="Logo" height="50" class="d-inline-block align-text-top me-2 rounded">
+                <span>Data Center</span>
             </a>
         </div>
     </nav>
 
     <!-- Main Content -->
     <div class="main-container">
-        <!-- Banner Section with Slideshow -->
-        <div class="banner-section d-none d-lg-flex">
+        <!-- Banner Section with Improved Slideshow -->
+        <div class="banner-section">
+
             <!-- Slide 1 -->
-            <div class="banner-slide banner-slide-1 active">
-                <div class="banner-content">
-                    <h1 class="display-4">Selamat Datang Kembali</h1>
-                    <p class="lead">Masuk ke akun Anda untuk mengakses semua fitur dan layanan kami</p>
-                    <div class="mt-4">
-                        <i class="bi bi-shield-check display-1 opacity-50"></i>
-                    </div>
-                </div>
+            <div class="banner-slide active">
+                <img src="{{ asset('assets/img/wqms.webp') }}" alt="Slide 1">
+                <div class="banner-overlay"></div>
+                <!-- Uncomment jika ingin ada teks -->
+                <!-- <div class="banner-content text-center">
+                    <h1>Selamat Datang</h1>
+                    <p class="lead">Kelola sistem dengan efisien dan cepat.</p>
+                </div> -->
             </div>
 
             <!-- Slide 2 -->
-            <div class="banner-slide banner-slide-2">
-                <div class="banner-content">
-                    <h1 class="display-4">Monitoring Real-Time</h1>
-                    <p class="lead">Pantau data sensor dan perangkat Anda secara langsung dan akurat</p>
-                    <div class="mt-4">
-                        <i class="bi bi-graph-up-arrow display-1 opacity-50"></i>
-                    </div>
+            <div class="banner-slide">
+
+                <img src="{{ asset('assets/img/wqms2.webp') }}" alt="Slide 2">
+                <div class="banner-overlay"></div>
+                <div class="banner-content text-center">
+                    <!-- <h1>Monitoring Real-Time</h1>
+                    <p class="lead">Data akurat langsung dari sumbernya.</p> -->
                 </div>
             </div>
 
             <!-- Slide 3 -->
-            <div class="banner-slide banner-slide-3">
-                <div class="banner-content">
-                    <h1 class="display-4">Keamanan Terjamin</h1>
-                    <p class="lead">Data Anda dilindungi dengan sistem keamanan tingkat tinggi</p>
-                    <div class="mt-4">
-                        <i class="bi bi-lock-fill display-1 opacity-50"></i>
-                    </div>
+            <div class="banner-slide">
+
+                <img src="{{ asset('assets/img/banner3.webp') }}" alt="Slide 3">
+                <div class="banner-overlay"></div>
+                <div class="banner-content text-center">
+                    <!-- <h1>Keamanan Terjamin</h1>
+                    <p class="lead">Sistem proteksi data tingkat lanjut.</p> -->
                 </div>
             </div>
         </div>
 
         <!-- Login Section -->
-        <div class="login-section d-flex align-items-center justify-content-center p-4"
-            style="background-color: background: #E9E9E9;">
+        <div class="login-section">
             <div class="card login-card">
-                <div class="card-header">
-                    <h4 class="mb-0">
-                        <i class="bi bi-box-arrow-in-right me-2"></i>
+                <div class="card-header text-center">
+                    <h4 class="mb-0 text-primary">
+                        <i class="bi bi-person-lock me-2"></i>
                         Login
                     </h4>
                 </div>
-                <div class="card-body p-4">
-                    <!-- Laravel Error Messages -->
-                    @if ($errors->any())
-                        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                            <div class="d-flex align-items-center">
-                                <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                                <div>
-                                    <strong>Perhatian!</strong>
-                                    <ul class="mb-0 mt-1">
-                                        @foreach ($errors->all() as $error)
-                                            <li>{{ $error }}</li>
-                                        @endforeach
-                                    </ul>
-                                </div>
-                            </div>
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    @endif
+                <div class="card-body">
 
-                    <!-- Session Status Message -->
-                    @if (session('status'))
-                        <div class="alert alert-info alert-dismissible fade show" role="alert">
-                            <div class="d-flex align-items-center">
-                                <i class="bi bi-info-circle-fill me-2"></i>
-                                <span>{{ session('status') }}</span>
-                            </div>
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    @endif
+                    <!-- Placeholder untuk Alert Laravel -->
+                    <div id="alert-placeholder"></div>
 
                     <!-- Login Form -->
                     <form method="POST" action="{{ route('login') }}" id="loginForm">
                         @csrf
-
                         <input type="hidden" name="timezone" id="timezone">
 
                         <!-- Username Field -->
                         <div class="mb-3">
-                            <label for="username" class="form-label fw-semibold">Username</label>
+                            <label for="username" class="form-label fw-semibold text-secondary">Username</label>
                             <div class="input-group has-validation">
-                                <span class="input-group-text">
-                                    <i class="bi bi-person"></i>
+                                <span class="input-group-text bg-light border-end-0">
+                                    <i class="bi bi-person text-muted"></i>
                                 </span>
-                                <input type="text" class="form-control @error('username') is-invalid @enderror"
+                                <input type="text"
+                                    class="form-control border-start-0 ps-0 @error('username') is-invalid @enderror"
                                     id="username" name="username" value="{{ old('username') }}"
                                     placeholder="Masukkan username" required autocomplete="username" autofocus>
                                 @error('username')
@@ -315,16 +356,18 @@
 
                         <!-- Password Field -->
                         <div class="mb-3">
-                            <label for="password" class="form-label fw-semibold">Password</label>
+                            <label for="password" class="form-label fw-semibold text-secondary">Password</label>
                             <div class="input-group has-validation">
-                                <span class="input-group-text">
-                                    <i class="bi bi-lock"></i>
+                                <span class="input-group-text bg-light border-end-0">
+                                    <i class="bi bi-lock text-muted"></i>
                                 </span>
-                                <input type="password" class="form-control @error('password') is-invalid @enderror"
+                                <input type="password"
+                                    class="form-control border-start-0 ps-0 @error('password') is-invalid @enderror"
                                     id="password" name="password" placeholder="Password" required
                                     autocomplete="current-password">
-                                <button class="btn btn-outline-secondary" type="button" id="togglePassword">
-                                    <i class="bi bi-eye"></i>
+                                <button class="btn btn-outline-secondary border-start-0" type="button"
+                                    id="togglePassword">
+                                    <i class="bi bi-eye-slash" id="toggleIcon"></i>
                                 </button>
                                 @error('password')
                                     <div class="invalid-feedback">
@@ -335,20 +378,20 @@
                         </div>
 
                         <!-- Remember Me -->
-                        <div class="mb-4">
+                        <div class="mb-4 d-flex justify-content-between align-items-center">
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="remember" name="remember">
-                                <label class="form-check-label" for="remember">
+                                <label class="form-check-label text-muted small" for="remember">
                                     Ingat saya
                                 </label>
                             </div>
                         </div>
 
                         <!-- Login Button -->
-                        <button type="submit" class="btn btn-primary w-100 mb-3">
+                        <button type="submit" class="btn btn-primary-custom w-100 mb-3 shadow-sm">
                             <span class="button-text">
                                 <i class="bi bi-box-arrow-in-right me-2"></i>
-                                Masuk
+                                Masuk Sekarang
                             </span>
                             <span class="spinner-border spinner-border-sm d-none" role="status">
                                 <span class="visually-hidden">Loading...</span>
@@ -356,8 +399,10 @@
                         </button>
 
                         <!-- Divider -->
-                        <div class="text-center mb-3">
-                            <span class="text-muted">atau</span>
+                        <div class="text-center mb-3 position-relative">
+                            <hr>
+                            <span
+                                class="position-absolute top-50 start-50 translate-middle bg-white px-3 text-muted small">atau</span>
                         </div>
 
                         <a href="{{ route('password.request') }}" class="btn btn-forgot-password">
@@ -368,14 +413,14 @@
                 </div>
             </div>
         </div>
+        
     </div>
 
     <!-- Footer -->
     <footer class="footer-custom">
         <div class="container text-center">
             <p class="mb-0">
-                &copy; {{ date('Y') }} {{ config('app.name', 'SecureLogin') }}.
-               
+                &copy; {{ date('Y') }} {{ config('app.name', 'SecureLogin') }}. All rights reserved.
             </p>
         </div>
     </footer>
@@ -387,28 +432,32 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
 
-            // Timezona
+            // Timezone Detection
             const timezoneInput = document.getElementById('timezone');
             if (timezoneInput) {
                 timezoneInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone;
             }
 
-
-            // Toggle password visibility
+            // Toggle password visibility logic
             const togglePassword = document.getElementById('togglePassword');
             const passwordInput = document.getElementById('password');
+            const toggleIcon = document.getElementById('toggleIcon');
 
             togglePassword.addEventListener('click', function() {
                 const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
                 passwordInput.setAttribute('type', type);
 
-                // Toggle icon
-                const icon = this.querySelector('i');
-                icon.classList.toggle('bi-eye');
-                icon.classList.toggle('bi-eye-slash');
+                // Toggle Icon
+                if (type === 'text') {
+                    toggleIcon.classList.remove('bi-eye-slash');
+                    toggleIcon.classList.add('bi-eye');
+                } else {
+                    toggleIcon.classList.remove('bi-eye');
+                    toggleIcon.classList.add('bi-eye-slash');
+                }
             });
 
-            // Handle form submission
+            // Handle form submission with loading state
             const loginForm = document.getElementById('loginForm');
             loginForm.addEventListener('submit', function(e) {
                 const submitBtn = this.querySelector('button[type="submit"]');
@@ -420,15 +469,15 @@
                 buttonText.classList.add('d-none');
                 spinner.classList.remove('d-none');
 
-                // Re-enable after 5 seconds (fallback)
+                // Fallback re-enable (hanya untuk demo jika tidak ada response server)
                 setTimeout(() => {
                     submitBtn.disabled = false;
                     buttonText.classList.remove('d-none');
                     spinner.classList.add('d-none');
-                }, 5000);
+                }, 8000);
             });
 
-            // Auto-hide alerts
+            // Auto-hide alerts (Simulation for frontend demo)
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
                 setTimeout(() => {
@@ -437,23 +486,20 @@
                 }, 5000);
             });
 
-            // Add animation to card
-            const card = document.querySelector('.login-card');
-            card.style.animation = 'fadeInUp 0.6s ease';
-
-            // Banner Slideshow
+            // Improved Banner Slideshow Logic
             const slides = document.querySelectorAll('.banner-slide');
             if (slides.length > 0) {
                 let currentSlide = 0;
+                const slideInterval = 5000; // Ganti slide setiap 5 detik
 
                 function showSlide(index) {
                     slides.forEach((slide, i) => {
-                        if (i === index) {
-                            slide.classList.add('active');
-                        } else {
-                            slide.classList.remove('active');
-                        }
+                        // Hapus class active
+                        slide.classList.remove('active');
                     });
+
+                    // Tambahkan class active ke slide baru
+                    slides[index].classList.add('active');
                 }
 
                 function nextSlide() {
@@ -461,26 +507,10 @@
                     showSlide(currentSlide);
                 }
 
-                // Auto advance slides every 5 seconds
-                setInterval(nextSlide, 5000);
+                // Mulai slideshow otomatis
+                setInterval(nextSlide, slideInterval);
             }
         });
-
-        // Add fade in animation
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes fadeInUp {
-                from {
-                    opacity: 0;
-                    transform: translateY(20px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-            }
-        `;
-        document.head.appendChild(style);
     </script>
 </body>
 
