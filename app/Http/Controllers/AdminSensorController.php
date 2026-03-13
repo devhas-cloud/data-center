@@ -17,7 +17,7 @@ class AdminSensorController extends Controller
     {
 
         if(Auth::user()->level == 'master') {
-            $sensors = SensorModel::with('device')->orderBy('id', 'desc')->get();
+            $sensors = SensorModel::whereHas('device')->with('device')->orderBy('id', 'desc')->get();
         } else {
             $sensors = SensorModel::whereHas('device', function ($query) {
                 $query->where('user_assigned', '=', Auth::user()->id);
