@@ -342,7 +342,8 @@
                         } else {
                             $('#current_image_preview').hide();
                         }
-                        
+                        // Set Device ID field to read-only when editing
+                        $('#device_id').prop('readonly', true);
                         $('#modalTitle').text('Edit Device');
                         sensorModal.show();
                     })

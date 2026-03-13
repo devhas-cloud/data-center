@@ -334,6 +334,7 @@
             function createDeviceCard(deviceId, sensors, forceExpand) {
                 const card = document.createElement('div');
                 card.className = 'sensor-card';
+                const deviceName = sensors[0]?.device?.device_name || 'Unknown Device';
 
                 const isCollapsed = !forceExpand;
                 const displayStyle = isCollapsed ? 'display: none;' : 'display: block;';
@@ -343,7 +344,7 @@
                 <div class="device-group-header ${headerClass}" onclick="toggleDevice('${deviceId}')">
                     <i class="bi bi-chevron-down"></i>
                     <i class="bi bi-hdd-rack"></i>
-                    <strong>${sensors[0].device.device_name}  (${deviceId}) </strong>
+                    <strong>${deviceName}  (${deviceId}) </strong>
                     <span class="device-badge">${sensors.length} Sensor${sensors.length > 1 ? 's' : ''}</span>
                 </div>
                 <div class="device-sensors" id="device-${deviceId}" style="${displayStyle}">
