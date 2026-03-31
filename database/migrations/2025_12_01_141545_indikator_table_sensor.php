@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::table('tbl_sensor', function (Blueprint $table) {
             $table->integer('parameter_indicator_min')->after('parameter_name')->nullable();
             $table->integer('parameter_indicator_max')->after('parameter_indicator_min')->nullable();
-            $table->integer('parameter_indicator_alert')->after('parameter_indicator_range')->nullable();
+            $table->integer('parameter_indicator_alert')->after('parameter_indicator_max')->nullable();
         });
     }
 
