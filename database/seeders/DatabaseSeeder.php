@@ -12,8 +12,7 @@ class DatabaseSeeder extends Seeder
     {
         
         // Call individual seeders in the correct order
-        $this->call([
-            UserSeeder::class,
-        ]);
+        // tambahkan seeder user
+        $this->call(UserSeeder::class);
     }
 }

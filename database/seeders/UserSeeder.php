@@ -19,8 +19,9 @@ class UserSeeder extends Seeder
                 'email' => 'admin@example.com',
                 'password' => bcrypt('password'),
                 'role' => 'admin',
+                'address' => null,
                 'date_expired' => now()->addYear(),
-                'api_key' => bin2hex(random_bytes(16)),
+                'api_key' => 'admin_api_key_12345678',
             ]
         );
 
@@ -33,7 +34,7 @@ class UserSeeder extends Seeder
                 'role' => 'user',
                 'address' => 'Jl. Test Address No.123, Jakarta',
                 'date_expired' => now()->addMonth(),
-                'api_key' => bin2hex(random_bytes(16)),
+                'api_key' => 'user_api_key_123456789',
             ]
         );
     }
