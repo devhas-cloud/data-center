@@ -15,6 +15,7 @@ class UserSeeder extends Seeder
         User::firstOrCreate(
             ['username' => 'admin'],
             [
+                'access' => null,
                 'name' => 'Admin User',
                 'email' => 'admin@example.com',
                 'password' => bcrypt('password'),
@@ -25,17 +26,5 @@ class UserSeeder extends Seeder
             ]
         );
 
-        User::firstOrCreate(
-            ['username' => 'user'],
-            [
-                'name' => 'Test User',
-                'email' => 'user@example.com',
-                'password' => bcrypt('password'),
-                'role' => 'user',
-                'address' => 'Jl. Test Address No.123, Jakarta',
-                'date_expired' => now()->addMonth(),
-                'api_key' => 'user_api_key_123456789',
-            ]
-        );
     }
 }
