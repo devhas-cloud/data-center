@@ -283,37 +283,22 @@
         <div class="banner-section">
 
             <!-- Slide 1 -->
-            <div class="banner-slide active">
-                <img src="{{ asset('assets/img/wqms.webp') }}" alt="Slide 1">
+            <a href="https://has-environmental.com/air-quality-monitoring-system/" target="_blank" rel="noopener noreferrer" class="banner-slide active">
+                <img src="{{ asset('assets/img/Banner1.png') }}" alt="Slide 1">
                 <div class="banner-overlay"></div>
-                <!-- Uncomment jika ingin ada teks -->
-                <!-- <div class="banner-content text-center">
-                    <h1>Selamat Datang</h1>
-                    <p class="lead">Kelola sistem dengan efisien dan cepat.</p>
-                </div> -->
-            </div>
+            </a>
 
             <!-- Slide 2 -->
-            <div class="banner-slide">
-
-                <img src="{{ asset('assets/img/wqms2.webp') }}" alt="Slide 2">
+            <a href="https://has-environmental.com/wastewater-monitoring/" target="_blank" rel="noopener noreferrer" class="banner-slide">
+                <img src="{{ asset('assets/img/Banner2.png') }}" alt="Slide 2">
                 <div class="banner-overlay"></div>
-                <div class="banner-content text-center">
-                    <!-- <h1>Monitoring Real-Time</h1>
-                    <p class="lead">Data akurat langsung dari sumbernya.</p> -->
-                </div>
-            </div>
+            </a>
 
             <!-- Slide 3 -->
-            <div class="banner-slide">
-
-                <img src="{{ asset('assets/img/banner3.webp') }}" alt="Slide 3">
+            <a href="https://has-environmental.com/air-quality-monitoring-system/" target="_blank" rel="noopener noreferrer" class="banner-slide">
+                <img src="{{ asset('assets/img/Banner3.png') }}" alt="Slide 3">
                 <div class="banner-overlay"></div>
-                <div class="banner-content text-center">
-                    <!-- <h1>Keamanan Terjamin</h1>
-                    <p class="lead">Sistem proteksi data tingkat lanjut.</p> -->
-                </div>
-            </div>
+            </a>
         </div>
 
         <!-- Login Section -->

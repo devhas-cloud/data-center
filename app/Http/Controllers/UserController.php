@@ -19,6 +19,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Nette\Utils\Json;
 
+use Illuminate\Support\Facades\Cache;
+
 //use Dompdf\Dompdf;
 //use Dompdf\Options;
 
@@ -36,67 +38,136 @@ class UserController extends Controller
     public function getDeviceForHome()
     {
         $userId = Auth::user()->id;
+        $cacheKey = "user:{$userId}:devices:home";
+        $cacheTTL = 5; // Cache 5 menit
 
-        // Get user access grouped by category
+        // Check if cached
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
+
+        // STEP 1: Eager load dengan optimized relationships
         $userAccess = AccessModel::where('user_id', $userId)
-            ->with(['category'])
-            ->get()
-            ->groupBy('category.category_name');
+            ->with(['category', 'device.sensors'])
+            ->get();
 
-        $result = [];
+        // Early exit jika tidak ada data
+        if ($userAccess->isEmpty()) {
+            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
+            return response()->json([]);
+        }
 
-        foreach ($userAccess as $categoryName => $accessRecords) {
-            $category = $accessRecords->first()->category;
-
-            if (!$category) {
-                continue;
+        // STEP 2: Collect device IDs dan parameter names dalam 1 loop
+        $deviceIds = [];
+        $paramNames = [];
+        
+        $userAccess->each(function ($access) use (&$deviceIds, &$paramNames) {
+            if ($access->device) {
+                $deviceIds[] = $access->device->device_id;
+                $access->device->sensors->each(function ($sensor) use (&$paramNames) {
+                    $paramNames[] = $sensor->parameter_name;
+                });
             }
+        });
 
-            $deviceData = [];
-            foreach ($accessRecords as $access) {
-                $device = $access->device;
+        // Early exit jika tidak ada sensors
+        if (empty($deviceIds) || empty($paramNames)) {
+            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
+            return response()->json([]);
+        }
 
-                if (!$device) {
-                    continue;
+        // STEP 3: Bulk fetch latest data (1 query dengan subquery)
+        $latestDataIds = DataModel::select(DB::raw('MAX(id) as id'))
+            ->whereIn('device_id', array_unique($deviceIds))
+            ->whereIn('parameter_name', array_unique($paramNames))
+            ->groupBy('device_id', 'parameter_name')
+            ->pluck('id');
+
+        // Early exit jika tidak ada latest data
+        if ($latestDataIds->isEmpty()) {
+            // Return structure tanpa latest values
+            $result = $userAccess->groupBy('category.category_name')
+                ->map(function ($group) {
+                    $category = $group->first()->category;
+                    if (!$category) return null;
+                    
+                    $devices = $group->map(function ($access) {
+                        return [
+                            'device_id' => $access->device->device_id,
+                            'device_name' => $access->device->device_name,
+                            'latitude' => $access->device->latitude,
+                            'longitude' => $access->device->longitude,
+                            'status' => $this->DeviceStatus($access->device->device_id, $access->device->device_gap_timeout),
+                            'sensors' => [],
+                        ];
+                    })->toArray();
+                    
+                    return [
+                        'device_category' => $category->category_name,
+                        'category_icon' => $category->category_icon,
+                        'devices' => $devices,
+                    ];
+                })->filter()->values();
+            
+            Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
+            return response()->json($result);
+        }
+
+        // STEP 4: Fetch actual data rows (1 query)
+        $latestDataCollection = DataModel::whereIn('id', $latestDataIds->unique())
+            ->get()
+            ->keyBy(function ($item) {
+                return $item->device_id . '|' . $item->parameter_name;
+            });
+
+        // STEP 5: Build response menggunakan collection methods (memory operations, no queries)
+        $result = $userAccess->groupBy('category.category_name')
+            ->map(function ($group) use ($latestDataCollection) {
+                $category = $group->first()->category;
+                
+                if (!$category) {
+                    return null;
                 }
 
-                $sensorsData = [];
-                foreach ($device->sensors as $sensor) {
-                    $latestData = DataModel::where('device_id', $device->device_id)
-                        ->where('parameter_name', $sensor->parameter_name)
-                        ->orderBy('timestamp', 'desc')
-                        ->first();
-
-                    if ($latestData) {
-                        $sensorsData[] = [
+                $devices = $group->filter(function ($access) {
+                    return $access->device !== null;
+                })->map(function ($access) use ($latestDataCollection) {
+                    $device = $access->device;
+                    
+                    $sensorsData = $device->sensors->map(function ($sensor) use ($device, $latestDataCollection) {
+                        $key = $device->device_id . '|' . $sensor->parameter_name;
+                        $latestData = $latestDataCollection->get($key);
+                        
+                        return $latestData ? [
                             'parameter_name' => $sensor->parameter_name,
                             'latest_value' => $latestData->value,
                             'recorded_at' => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
-                        ];
-                    }
-                }
+                        ] : null;
+                    })->filter()->values();
+                    
+                    return [
+                        'device_id' => $device->device_id,
+                        'device_name' => $device->device_name,
+                        'latitude' => $device->latitude,
+                        'longitude' => $device->longitude,
+                        'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                        'sensors' => $sensorsData->toArray(),
+                    ];
+                })->values();
 
-                $deviceData[] = [
-                    'device_id' => $device->device_id,
-                    'device_name' => $device->device_name,
-                    'latitude' => $device->latitude,
-                    'longitude' => $device->longitude,
-                    'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
-                    'sensors' => $sensorsData,
-                ];
-            }
-
-            if (!empty($deviceData)) {
-                $result[] = [
+                return !$devices->isEmpty() ? [
                     'device_category' => $category->category_name,
                     'category_icon' => $category->category_icon,
-                    'devices' => $deviceData,
-                ];
-            }
-        }
+                    'devices' => $devices->toArray(),
+                ] : null;
+            })->filter()->values();
+
+        // Cache hasil selama 5 menit
+        Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
 
         return response()->json($result);
     }
+
 
     public function getCategoryDevices($categoryName)
     {
@@ -118,6 +189,7 @@ class UserController extends Controller
         //     $statusMessage = "Offline";
         // }
         # Perbaiki metode pengecekan status dimana jika data terakhir lebih dari 6 menit yang lalu, maka dianggap offline
+        
         $latestData = DataModel::where('device_id', $deviceId)->orderBy('timestamp', 'desc')->first();
         if (!$latestData) {
             return "Offline";
@@ -170,13 +242,22 @@ class UserController extends Controller
 
     public function getMapsDashboard($deviceId)
     {
-        $device = DeviceModel::where('device_id', $deviceId)->first();
+        $cacheKey = "device:{$deviceId}:maps";
+        $cacheTTL = 3; // Cache 3 menit
+
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
+
+        $device = DeviceModel::where('device_id', $deviceId)
+            ->with('category')
+            ->first();
 
         if (!$device) {
             return response()->json(['error' => 'Device not found'], 404);
         }
 
-        return response()->json([
+        $mapData = [
             'device_id' => $device->device_id,
             'device_name' => $device->device_name,
             'device_icon' => $device->category ? $device->category->category_icon : null,
@@ -184,39 +265,74 @@ class UserController extends Controller
             'latitude' => $device->latitude,
             'longitude' => $device->longitude,
             'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+        ];
 
-        ], 200);
+        Cache::put($cacheKey, $mapData, now()->addMinutes($cacheTTL));
+
+        return response()->json($mapData, 200);
     }
 
 
     public function progressBar($deviceId)
     {
+        $cacheKey = "device:{$deviceId}:progress";
+        $cacheTTL = 1;
 
-        $data = ParameterModel::whereIn('parameter_name', function ($query) use ($deviceId) {
-            $query->select('parameter_name')
-                ->from('tbl_sensor')
-                ->where('device_id', $deviceId);
-        })->get()
-            ->map(function ($parameter) use ($deviceId) {
-                $sensor = SensorModel::where('device_id', $deviceId)
-                    ->where('parameter_name', $parameter->parameter_name)
-                    ->first();
-                $latestData = DataModel::where('device_id', $deviceId)
-                    ->where('parameter_name', $parameter->parameter_name)
-                    ->orderBy('timestamp', 'desc')
-                    ->first();
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
 
-                return [
-                    'parameter_label' => $parameter->parameter_label,
-                    'parameter_name' => $sensor->parameter_name,
-                    'latest_value' => $latestData ? $latestData->value : null,
-                    'recorded_at' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s') : null,
-                    'parameter_indicator_min' => $sensor->parameter_indicator_min,
-                    'parameter_indicator_max' => $sensor->parameter_indicator_max,
-                    'sensor_unit' => $sensor->sensor_unit,
+        // STEP 1: Get all sensors + parameters (1 query)
+        $sensors = SensorModel::where('device_id', $deviceId)
+            ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+            ->select(
+                'tbl_sensor.id',
+                'tbl_sensor.device_id',
+                'tbl_sensor.parameter_name',
+                'tbl_sensor.sensor_unit',
+                'tbl_sensor.parameter_indicator_min',
+                'tbl_sensor.parameter_indicator_max',
+                'tbl_sensor.parameter_indicator_alert',
+                'tbl_parameter.parameter_label'
+            )
+            ->get()
+            ->keyBy('parameter_name'); // Key by parameter_name untuk matching
 
-                ];
-            });
+        if ($sensors->isEmpty()) {
+            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
+            return response()->json([]);
+        }
+
+        // STEP 2: Get LATEST data untuk SEMUA sensor sekaligus (1 query, bukan N query!)
+        // Gunakan MAX(id) per parameter_name untuk efficiency
+        $latestDataIds = DataModel::select(DB::raw('MAX(id) as id'))
+            ->where('device_id', $deviceId)
+            ->whereIn('parameter_name', $sensors->keys()->toArray())
+            ->groupBy('parameter_name')
+            ->pluck('id');
+
+        // STEP 3: Fetch actual data rows (1 query)
+        $latestDataCollection = DataModel::whereIn('id', $latestDataIds)
+            ->get()
+            ->keyBy('parameter_name'); // Key by parameter_name untuk easy lookup
+
+        // STEP 4: Build response dengan data yang sudah di-load di memory
+        $data = $sensors->map(function ($sensor) use ($latestDataCollection) {
+            $latestData = $latestDataCollection->get($sensor->parameter_name);
+            
+            return [
+                'parameter_label' => $sensor->parameter_label,
+                'parameter_name' => $sensor->parameter_name,
+                'latest_value' => $latestData ? $latestData->value : null,
+                'recorded_at' => $latestData ? $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s') : null,
+                'parameter_indicator_min' => $sensor->parameter_indicator_min,
+                'parameter_indicator_max' => $sensor->parameter_indicator_max,
+                'sensor_unit' => $sensor->sensor_unit,
+            ];
+        })->values(); // values() untuk reset array keys
+
+        Cache::put($cacheKey, $data, now()->addMinutes($cacheTTL));
+
         return response()->json($data);
     }
 
@@ -229,10 +345,23 @@ class UserController extends Controller
             return response()->json(['error' => 'Parameter is required'], 400);
         }
 
-        // Get sensor unit
-        $sensor = SensorModel::where('device_id', $deviceId)
-            ->where('parameter_name', $parameter)
-            ->first();
+        $cacheKey = "device:{$deviceId}:chart:line:{$parameter}";
+        $cacheTTL = 2; // Cache 2 menit untuk chart
+
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
+
+        // Get sensor unit (cache sensor info)
+        $sensorCacheKey = "device:{$deviceId}:sensor:{$parameter}";
+        if (Cache::has($sensorCacheKey)) {
+            $sensor = Cache::get($sensorCacheKey);
+        } else {
+            $sensor = SensorModel::where('device_id', $deviceId)
+                ->where('parameter_name', $parameter)
+                ->first();
+            Cache::put($sensorCacheKey, $sensor, now()->addMinutes(10));
+        }
 
         $unit = $sensor ? $sensor->sensor_unit : '';
 
@@ -242,9 +371,6 @@ class UserController extends Controller
         $endTime = $now->copy(); // Waktu sekarang
 
         //ubah menjadi unix timestamp
-
-        
-
 
         $data = DataModel::where('device_id', $deviceId)
             ->where('parameter_name', $parameter)
@@ -263,9 +389,9 @@ class UserController extends Controller
             $gapTimeout = $device->device_gap_timeout ?? 1;
         }
 
-    
+
         foreach ($data as $item) {
-             $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
+            $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
                 ->setTimezone(config('app.timezone'));
             // Jika ada data sebelumnya, cek gap waktunya
 
@@ -289,12 +415,16 @@ class UserController extends Controller
             $previousTime = $currentTime;
         }
 
-        return response()->json([
+        $chartData = [
             'labels' => $labels,
             'values' => $values,
             'parameter_label' => $sensor ? $sensor->parameter->parameter_label : $sensor->parameter_name,
             'unit' => $unit,
-        ]);
+        ];
+
+        Cache::put($cacheKey, $chartData, now()->addMinutes($cacheTTL));
+
+        return response()->json($chartData);
     }
 
     public function barChartData(Request $request, $deviceId)
@@ -306,10 +436,23 @@ class UserController extends Controller
             return response()->json(['error' => 'Parameter is required'], 400);
         }
 
-        // Get sensor unit
-        $sensor = SensorModel::where('device_id', $deviceId)
-            ->where('parameter_name', $parameter)
-            ->first();
+        $cacheKey = "device:{$deviceId}:chart:bar:{$parameter}";
+        $cacheTTL = 2; // Cache 2 menit
+
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
+
+        // Get sensor unit (cache sensor info)
+        $sensorCacheKey = "device:{$deviceId}:sensor:{$parameter}";
+        if (Cache::has($sensorCacheKey)) {
+            $sensor = Cache::get($sensorCacheKey);
+        } else {
+            $sensor = SensorModel::where('device_id', $deviceId)
+                ->where('parameter_name', $parameter)
+                ->first();
+            Cache::put($sensorCacheKey, $sensor, now()->addMinutes(10));
+        }
 
         $unit = $sensor ? $sensor->sensor_unit : '';
 
@@ -333,18 +476,29 @@ class UserController extends Controller
             $labels[] = $item->hour;
             $values[] = round(floatval($item->avg_value), 2);
         }
-        return response()->json([
+        
+        $chartData = [
             'labels' => $labels,
             'values' => $values,
             'parameter_label' => $sensor ? $sensor->parameter->parameter_label : $sensor->parameter_name,
             'unit' => $unit
-        ]);
+        ];
+
+        Cache::put($cacheKey, $chartData, now()->addMinutes($cacheTTL));
+
+        return response()->json($chartData);
     }
 
 
     public function windroseData($deviceId)
     {
         try {
+            $cacheKey = "device:{$deviceId}:windrose";
+            $cacheTTL = 3; // Cache 3 menit
+
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey));
+            }
 
             $now = Carbon::now();
             // Konversi range waktu - default 24 jam terakhir
@@ -374,11 +528,15 @@ class UserController extends Controller
                 $wdir[] = $row->wdir !== null ? floatval($row->wdir) : null;
             }
 
-            return response()->json([
+            $windroseData = [
                 "timestamps" => $timestamps,
                 "wspeed" => $wspeed,
                 "wdir" => $wdir
-            ]);
+            ];
+
+            Cache::put($cacheKey, $windroseData, now()->addMinutes($cacheTTL));
+
+            return response()->json($windroseData);
         } catch (\Exception $e) {
 
             return response()->json([
@@ -395,14 +553,10 @@ class UserController extends Controller
     {
         try {
             $parameterName = $request->input('parameter');
-            $startDate = $request->input('start_date');
-            $endDate = $request->input('end_date');
+            $startDateStr = $request->input('start_date');
+            $endDateStr = $request->input('end_date');
 
-            // ubah format tanggal ke unix timestamp
-            $startDate = Carbon::parse($startDate)->timestamp;
-            $endDate = Carbon::parse($endDate)->timestamp;
-
-            if (!$parameterName || !$startDate || !$endDate) {
+            if (!$parameterName || !$startDateStr || !$endDateStr) {
                 return response()->json([
                     'labels' => [],
                     'values' => [],
@@ -411,16 +565,34 @@ class UserController extends Controller
                 ], 400);
             }
 
+            // Create cache key dengan date range
+            $cacheKey = "device:{$deviceId}:chart:historical:{$parameterName}:{$startDateStr}:{$endDateStr}";
+            $cacheTTL = 5; // Cache 5 menit untuk historical data
+
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey));
+            }
+
+            // ubah format tanggal ke unix timestamp
+            $startDate = Carbon::parse($startDateStr)->timestamp;
+            $endDate = Carbon::parse($endDateStr)->timestamp;
+
             // Query data tanpa aggregation - ambil semua data points
             $data = DataModel::where('device_id', $deviceId)
                 ->where('parameter_name', $parameterName)
                 ->whereBetween('timestamp', [$startDate, $endDate])
                 ->orderBy('timestamp', 'asc')
                 ->get();
-            // Get sensor unit
-            $sensor = SensorModel::where('device_id', $deviceId)
-                ->where('parameter_name', $parameterName)
-                ->first();
+            // Get sensor unit (cache sensor info)
+            $sensorCacheKey = "device:{$deviceId}:sensor:{$parameterName}";
+            if (Cache::has($sensorCacheKey)) {
+                $sensor = Cache::get($sensorCacheKey);
+            } else {
+                $sensor = SensorModel::where('device_id', $deviceId)
+                    ->where('parameter_name', $parameterName)
+                    ->first();
+                Cache::put($sensorCacheKey, $sensor, now()->addMinutes(10));
+            }
             $unit = $sensor ? $sensor->sensor_unit : '';
             // Prepare labels and values with gap detection
             $labels = [];
@@ -434,7 +606,7 @@ class UserController extends Controller
 
             foreach ($data as $item) {
                 $currentTime = Carbon::createFromTimestamp($item->timestamp, 'UTC')
-                ->setTimezone(config('app.timezone'));
+                    ->setTimezone(config('app.timezone'));
 
                 // Jika ada data sebelumnya, cek gap waktunya
                 if ($previousTime !== null) {
@@ -456,12 +628,17 @@ class UserController extends Controller
                 $values[] = round(floatval($item->value), 2);
                 $previousTime = $currentTime;
             }
-            return response()->json([
+            
+            $chartData = [
                 'labels' => $labels,
                 'values' => $values,
                 'parameter_label' => $sensor ? $sensor->parameter->parameter_label : $sensor->parameter_name,
                 'unit' => $unit
-            ]);
+            ];
+
+            Cache::put($cacheKey, $chartData, now()->addMinutes($cacheTTL));
+
+            return response()->json($chartData);
         } catch (\Exception $e) {
             return response()->json([
                 'labels' => [],
@@ -508,14 +685,31 @@ class UserController extends Controller
 
     public function getDeviceInfo($deviceId)
     {
-        $device = DeviceModel::where('device_id', $deviceId)->first();
+        $cacheKey = "device:{$deviceId}:info";
+        $cacheTTL = 5; // Cache 5 menit
+
+        if (Cache::has($cacheKey)) {
+            return response()->json(Cache::get($cacheKey));
+        }
+
+        $device = DeviceModel::where('device_id', $deviceId)
+            ->with('category')
+            ->first();
 
         if (!$device) {
             return response()->json(['error' => 'Device not found'], 404);
         }
-        $latestData = DataModel::where('device_id', $deviceId)
-            ->orderBy('timestamp', 'desc')
-            ->first();
+        
+        // Cache latest data per sensor
+        $latestDataCacheKey = "device:{$deviceId}:latest";
+        if (Cache::has($latestDataCacheKey)) {
+            $latestData = Cache::get($latestDataCacheKey);
+        } else {
+            $latestData = DataModel::where('device_id', $deviceId)
+                ->orderBy('timestamp', 'desc')
+                ->first();
+            Cache::put($latestDataCacheKey, $latestData, now()->addMinutes(2));
+        }
 
         $dataDevice = [
             'device_id' => $device->device_id,
@@ -558,11 +752,15 @@ class UserController extends Controller
                 ];
             });
 
-        return response()->json([
+        $deviceInfo = [
             'device' => $dataDevice,
             'configuration' => $dataConfig,
             'syslogs' => $sysLogHeaders,
-        ], 200);
+        ];
+
+        Cache::put($cacheKey, $deviceInfo, now()->addMinutes($cacheTTL));
+
+        return response()->json($deviceInfo, 200);
     }
 
     public function getSyslogDetail($id)
@@ -909,157 +1107,194 @@ class UserController extends Controller
 
 
     public function getTableDeviceReport(Request $request)
-{
-    try {
-        // Validate request
-        $validated = $request->validate([
-            'device_id' => 'required|string|exists:tbl_device,device_id',
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-        ]);
+    {
+        try {
+            // Validate request - simplified without pagination
+            $validated = $request->validate([
+                'device_id' => 'required|string|exists:tbl_device,device_id',
+                'start_date' => 'required|date',
+                'end_date' => 'required|date|after_or_equal:start_date',
+            ]);
 
-        $deviceId = $validated['device_id'];
-        $startDate = $validated['start_date'];
-        $endDate = $validated['end_date'];
+            $deviceId = $validated['device_id'];
+            $startDate = $validated['start_date'];
+            $endDate = $validated['end_date'];
 
-        // Convert to Unix timestamp
-        $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
-        $endDateUnix = Carbon::parse($endDate)->endOfDay()->timestamp;
+            // Validate date range - maximum 3 months (90 days)
+            $startDateObj = Carbon::parse($startDate);
+            $endDateObj = Carbon::parse($endDate);
+            $daysDifference = $startDateObj->diffInDays($endDateObj);
+            
+            if ($daysDifference > 90) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Date range cannot exceed 3 months (90 days). Please select a shorter date range.'
+                ], 422);
+            }
 
-        // Verify device belongs to user
-        $device = DeviceModel::where('device_id', $deviceId)
-            ->whereIn('id', function ($query) {
-                $query->select('device_id')
-                    ->from('tbl_access')
-                    ->where('user_id', Auth::id());
-            })
-            ->select('device_id', 'device_category')
-            ->first();
+            // Cache key for table report data
+            $cacheKey = "device:{$deviceId}:table-report:{$startDate}:{$endDate}";
+            $cacheTTL = 5; // 5 minutes
 
-        if (!$device) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Device not found or unauthorized'
-            ], 403);
-        }
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey), 200);
+            }
 
-        // Get active sensors with parameter details
-        $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
-            ->where('tbl_sensor.status', 'active')
-            ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
-            ->select(
-                'tbl_sensor.parameter_name',
-                'tbl_parameter.parameter_label',
-                'tbl_sensor.sensor_unit'
+            // Convert to Unix timestamp
+            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+            $endDateUnix = Carbon::parse($endDate)->endOfDay()->timestamp;
+
+            // Verify device belongs to user
+            $device = DeviceModel::where('device_id', $deviceId)
+                ->whereIn('id', function ($query) {
+                    $query->select('device_id')
+                        ->from('tbl_access')
+                        ->where('user_id', Auth::id());
+                })
+                ->select('device_id', 'device_category')
+                ->first();
+
+            if (!$device) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Device not found or unauthorized'
+                ], 403);
+            }
+
+            // Get active sensors with parameter details
+            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+                ->where('tbl_sensor.status', 'active')
+                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+                ->select(
+                    'tbl_sensor.parameter_name',
+                    'tbl_parameter.parameter_label',
+                    'tbl_sensor.sensor_unit'
+                )
+                ->orderBy('tbl_sensor.id', 'asc')
+                ->get();
+
+            if ($sensors->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No active sensors found for this device'
+                ], 404);
+            }
+
+            // Build parameter info and list
+            $parameterInfo = [];
+            $parameters = [];
+            foreach ($sensors as $sensor) {
+                $parameters[] = $sensor->parameter_name;
+                $parameterInfo[] = [
+                    'parameter_name' => $sensor->parameter_name,
+                    'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
+                    'parameter_unit' => $sensor->sensor_unit ?? ''
+                ];
+            }
+
+            // Get data with limit (max 2000 records) - memory efficient
+            $data = DataModel::select(
+                DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
+                'parameter_name',
+                'value',
+                'timestamp'
             )
-            ->orderBy('tbl_sensor.id', 'asc')
-            ->get();
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->orderBy('timestamp', 'asc')
+                //->limit(2000) // Max 2000 data points to prevent memory issues
+                ->get();
 
-        if ($sensors->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No active sensors found for this device'
-            ], 404);
-        }
+            if ($data->isEmpty()) {
+                $response = [
+                    'success' => true,
+                    'message' => 'No data found for the selected date range',
+                    'device_id' => $deviceId,
+                    'device_category' => $device->device_category,
+                    'parameters' => $parameterInfo,
+                    'data' => [],
+                    'total_records' => 0,
+                    'date_range' => [
+                        'start' => $startDate,
+                        'end' => $endDate
+                    ]
+                ];
+                Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+                return response()->json($response, 200);
+            }
 
-        // Build parameter info and list
-        $parameterInfo = [];
-        $parameters = [];
-        foreach ($sensors as $sensor) {
-            $parameters[] = $sensor->parameter_name;
-            $parameterInfo[] = [
-                'parameter_name' => $sensor->parameter_name,
-                'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
-                'parameter_unit' => $sensor->sensor_unit ?? ''
-            ];
-        }
+            // Group data by timestamp_minute (memory efficient)
+            $groupedData = [];
+            foreach ($data as $item) {
+                $timestamp = $item->timestamp_minute;
+                if (!isset($groupedData[$timestamp])) {
+                    $groupedData[$timestamp] = [
+                        'recorded_at' => $item->timestamp,
+                        'values' => []
+                    ];
+                }
+                $groupedData[$timestamp]['values'][$item->parameter_name] = round(floatval($item->value), 2);
+            }
 
-        // Get data, convert Unix timestamp to human-readable minute format
-        $data = DataModel::select(
-            DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
-            'parameter_name',
-            'value',
-            'timestamp' // Keep original Unix timestamp for Carbon
-        )
-        ->where('device_id', $deviceId)
-        ->whereIn('parameter_name', $parameters)
-        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
-        ->orderBy('timestamp', 'asc')
-        ->get();
+            // Format data into table
+            $tableData = [];
+            $no = 1;
+            foreach ($groupedData as $timestamp => $group) {
+                $dateTime = Carbon::createFromTimestamp($group['recorded_at'], 'UTC')
+                    ->setTimezone(config('app.timezone'));
+                $row = [
+                    'no' => $no++,
+                    'date' => $dateTime->format('Y-m-d'),
+                    'time' => $dateTime->format('H:i'),
+                    'recorded_at' => $dateTime->format('Y-m-d H:i:s')
+                ];
 
-        if ($data->isEmpty()) {
-            return response()->json([
+                foreach ($parameters as $parameter) {
+                    $row[$parameter] = $group['values'][$parameter] ?? null;
+                }
+
+                $tableData[] = $row;
+            }
+
+            $response = [
                 'success' => true,
-                'message' => 'No data found for the selected date range',
                 'device_id' => $deviceId,
                 'device_category' => $device->device_category,
                 'parameters' => $parameterInfo,
-                'data' => []
-            ], 200);
-        }
-
-        // Group data by timestamp_minute
-        $groupedData = [];
-        foreach ($data as $item) {
-            $timestamp = $item->timestamp_minute;
-            if (!isset($groupedData[$timestamp])) {
-                $groupedData[$timestamp] = [
-                    'recorded_at' => $item->timestamp, // Unix timestamp
-                    'values' => []
-                ];
-            }
-            $groupedData[$timestamp]['values'][$item->parameter_name] = round(floatval($item->value), 2);
-        }
-
-        // Format data into table
-        $tableData = [];
-        $no = 1;
-        foreach ($groupedData as $timestamp => $group) {
-            $dateTime = Carbon::createFromTimestamp($group['recorded_at'], 'UTC')
-                ->setTimezone(config('app.timezone'));
-            $row = [
-                'no' => $no++,
-                'date' => $dateTime->format('Y-m-d'),
-                'time' => $dateTime->format('H:i'),
-                'recorded_at' => $dateTime->format('Y-m-d H:i:s')
+                'data' => $tableData,
+                'total_records' => count($tableData),
+                'date_range' => [
+                    'start' => $startDate,
+                    'end' => $endDate
+                ]
             ];
 
-            foreach ($parameters as $parameter) {
-                $row[$parameter] = $group['values'][$parameter] ?? null;
-            }
+            // Store in cache
+            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
 
-            $tableData[] = $row;
+            return response()->json($response, 200);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            \Log::error('Report validation error', ['errors' => $e->errors()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            \Log::error('Report fetch error', [
+                'device_id' => $request->input('device_id'),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch report data',
+                'debug' => config('app.debug') ? $e->getMessage() : null
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'device_id' => $deviceId,
-            'device_category' => $device->device_category,
-            'parameters' => $parameterInfo,
-            'data' => $tableData,
-            'total_records' => count($tableData),
-            'date_range' => [
-                'start' => $startDate,
-                'end' => $endDate
-            ]
-        ], 200);
-
-    } catch (\Illuminate\Validation\ValidationException $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $e->errors()
-        ], 422);
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to fetch report data: ' . $e->getMessage()
-        ], 500);
     }
-}
-
-
-
 
     public function exportReportExcel(Request $request)
     {
@@ -1093,7 +1328,7 @@ class UserController extends Controller
                 ], 403);
             }
 
-            
+
             // Get report data
             $reportData = $this->getReportData($deviceId, $startDate, $endDate);
 
@@ -1284,6 +1519,15 @@ class UserController extends Controller
     private function getReportData($deviceId, $startDate, $endDate)
     {
         try {
+            // Cache key for report data (includes date range)
+            $cacheKey = "device:{$deviceId}:report:{$startDate}:{$endDate}";
+            $cacheTTL = 5; // 5 minutes - appropriate for report data that may be regenerated
+
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return Cache::get($cacheKey);
+            }
+
             // Verify device belongs to user - optimized query
             $device = DeviceModel::where('device_id', $deviceId)
                 ->whereIn('id', function ($query) {
@@ -1351,7 +1595,7 @@ class UserController extends Controller
 
 
             if ($data->isEmpty()) {
-                return [
+                $reportData = [
                     'success' => true,
                     'message' => 'No data found for the selected date range',
                     'device_id' => $deviceId,
@@ -1364,6 +1608,9 @@ class UserController extends Controller
                         'end' => $endDate
                     ]
                 ];
+                // Store in cache even for empty results
+                Cache::put($cacheKey, $reportData, now()->addMinutes($cacheTTL));
+                return $reportData;
             }
 
             // Group data by timestamp more efficiently
@@ -1400,7 +1647,7 @@ class UserController extends Controller
                 $tableData[] = $row;
             }
 
-            return [
+            $reportData = [
                 'success' => true,
                 'device_id' => $deviceId,
                 'device_category' => $device->device_category,
@@ -1412,6 +1659,11 @@ class UserController extends Controller
                     'end' => $endDate
                 ]
             ];
+
+            // Store in cache
+            Cache::put($cacheKey, $reportData, now()->addMinutes($cacheTTL));
+
+            return $reportData;
         } catch (\Exception $e) {
             return [
                 'success' => false,
@@ -1434,7 +1686,7 @@ class UserController extends Controller
             ->filter(); // Remove null devices
 
         $profile = User::find(Auth::user()->id);
-        
+
         $accesCrud = Auth::user()->level === 'advanced' ? true : false;
         return view('user.settings', [
             'devices' => $devices,
@@ -1641,12 +1893,12 @@ class UserController extends Controller
         $unreadCount = AccessModel::with(['device.logs' => function ($query) {
             $query->where('is_read_user', false);
         }])
-        ->where('user_id', Auth::user()->id)
-        ->get()
-        ->flatMap(function ($access) {
-            return $access->device->logs;
-        })
-        ->count();
+            ->where('user_id', Auth::user()->id)
+            ->get()
+            ->flatMap(function ($access) {
+                return $access->device->logs;
+            })
+            ->count();
 
         return response()->json([
             'success' => true,
@@ -1668,20 +1920,20 @@ class UserController extends Controller
             // Get all logs for devices accessible by user
             $query = AccessModel::with(['device.logs' => function ($query) use ($category, $startDateTime, $endDateTime, $status) {
                 $query->orderBy('log_date', 'desc');
-                
+
                 if ($category) {
                     $query->where('category', $category);
                 }
-                
+
                 if ($startDateTime && $endDateTime) {
                     $query->whereBetween('log_date', [$startDateTime, $endDateTime]);
                 }
-                
+
                 if ($status) {
                     $query->where('action', $status);
                 }
             }])
-            ->where('user_id', Auth::user()->id);
+                ->where('user_id', Auth::user()->id);
 
             if ($deviceId) {
                 $query->whereHas('device', function ($q) use ($deviceId) {
@@ -1777,11 +2029,4 @@ class UserController extends Controller
             ], 500);
         }
     }
-
-
-
-
-
-
-
 }

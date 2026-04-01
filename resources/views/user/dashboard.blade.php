@@ -669,7 +669,7 @@
                             return data;
                         }
 
-                        console.log('Progress bar data received:', data);
+                        //console.log('Progress bar data received:', data);
                         parameters = data; // Store parameters globally
                         renderProgressBars(data);
                         return data; // Return data for chaining
@@ -1771,7 +1771,7 @@
                         showlegend: false
                     };
 
-                    Plotly.newPlot("windRoseChart", [trace], layout);
+                    Plotly.newPlot("windRoseChart", [trace], layout, {displaylogo: false});
 
                 } catch (e) {
                     if (e.name === 'AbortError') {
@@ -1985,10 +1985,8 @@
                 $('#historicalChartStartDate').val(formatDateTimeForHistorical(twoDaysAgo));
                 $('#historicalChartEndDate').val(formatDateTimeForHistorical(today));
 
-                // Load parameters after progress bar data is available
-                if (parameters.length > 0) {
-                    loadHistoricalChartParameters();
-                }
+                // Note: loadHistoricalChartParameters() will be called from initialization chain
+                // to avoid double-loading the historical chart data
             }
 
             function loadHistoricalChartParameters() {
@@ -2076,12 +2074,12 @@
                     return;
                 }
 
-                console.log('Loading Historical Chart:', {
-                    deviceId: deviceId,
-                    parameter: parameterName,
-                    startDate: startDate,
-                    endDate: endDate
-                });
+                // console.log('Loading Historical Chart:', {
+                //     deviceId: deviceId,
+                //     parameter: parameterName,
+                //     startDate: startDate,
+                //     endDate: endDate
+                // });
 
                 // Show loader
                 setLoaderLoading('historicalChartLoader', 'Loading chart data...');
@@ -2135,7 +2133,7 @@
                         if (error.name === 'AbortError') {
                             return;
                         }
-                        console.error('Error loading historical chart data:', error);
+                        //console.error('Error loading historical chart data:', error);
                         setLoaderNoData('historicalChartLoader', 'No data available');
                         document.getElementById('historicalLineChart').style.display = 'none';
                     });

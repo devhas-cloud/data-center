@@ -14,6 +14,9 @@
     }
 </style>
 
+<!-- Flatpickr Datepicker CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+
 @section('content')
     <div class="container-fluid p-3">
         <div class="row">
@@ -83,13 +86,13 @@
                                 <!-- Start Date -->
                                 <div class="col-md-2">
                                     <label for="quickStartDate" class="form-label">Start Date</label>
-                                    <input type="date" class="form-control" id="quickStartDate" required>
+                                    <input type="text" class="form-control" id="quickStartDate" placeholder="YYYY-MM-DD" required>
                                 </div>
 
                                 <!-- End Date -->
                                 <div class="col-md-2 mb-1">
                                     <label for="quickEndDate" class="form-label">End Date</label>
-                                    <input type="date" class="form-control" id="quickEndDate" required>
+                                    <input type="text" class="form-control" id="quickEndDate" placeholder="YYYY-MM-DD" required>
                                 </div>
 
                                 <!-- Show Button -->
@@ -178,6 +181,9 @@
 @endsection
 
 @section('script')
+    <!-- Flatpickr Datepicker JS -->
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    
     <script type="text/javascript">
         let currentReportId = null;
         let reportModal = null;
@@ -580,8 +586,21 @@
             return `${year}-${month}-${day}`;
         };
 
-        document.getElementById('quickStartDate').value = formatDate(yesterday);
-        document.getElementById('quickEndDate').value = formatDate(today);
+        // Initialize Flatpickr for Start Date
+        const startDatePicker = flatpickr("#quickStartDate", {
+            dateFormat: "Y-m-d",
+            defaultDate: formatDate(yesterday),
+            minDate: "2020-01-01",
+            maxDate: "today"
+        });
+
+        // Initialize Flatpickr for End Date
+        const endDatePicker = flatpickr("#quickEndDate", {
+            dateFormat: "Y-m-d",
+            defaultDate: formatDate(today),
+            minDate: "2020-01-01",
+            maxDate: "today"
+        });
 
         // Isikan select device category
         let deviceCategorySelect = document.getElementById('deviceCategory');
@@ -677,6 +696,20 @@
                 return;
             }
 
+            // Client-side validation: Check date range (31 days max)
+            const startDateObj = new Date(startDate);
+            const endDateObj = new Date(endDate);
+            const daysDifference = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+            
+            if (daysDifference > 30) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Date Range Too Long',
+                    text: `Hanya bisa dilakukan maksimal 1 bulan. Silakan pilih rentang tanggal yang lebih pendek.`
+                });
+                return;
+            }
+
             // Show loading
             Swal.fire({
                 title: 'Loading...',
@@ -687,13 +720,49 @@
                 }
             });
 
-            // Fetch data from API
-            fetch(`/user/report-table-data?device_id=${encodeURIComponent(deviceId)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`)
+            // Fetch data from API - simple URL without pagination params
+            const url = new URL('/user/report-table-data', window.location.origin);
+            url.searchParams.append('device_id', deviceId);
+            url.searchParams.append('start_date', startDate);
+            url.searchParams.append('end_date', endDate);
+
+            // Set timeout for long-running queries
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 120000); // 2 minutes timeout
+
+            fetch(url.toString(), { signal: controller.signal })
                 .then(response => {
+                    clearTimeout(timeout);
+
                     if (!response.ok) {
-                        return response.json().then(err => Promise.reject(err));
+                        // If response is not ok, try to parse as JSON for error message
+                        if (response.headers.get('content-type')?.includes('application/json')) {
+                            return response.json().then(err => Promise.reject(err));
+                        } else {
+                            // If not JSON, return generic error
+                            return Promise.reject({
+                                success: false,
+                                message: `Server error (${response.status}): ${response.statusText}`
+                            });
+                        }
                     }
-                    return response.json();
+
+                    // Check content-type before parsing JSON
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        return Promise.reject({
+                            success: false,
+                            message: 'Invalid response format from server'
+                        });
+                    }
+
+                    return response.json().catch(err => {
+                        return Promise.reject({
+                            success: false,
+                            message: 'Failed to parse server response (Invalid JSON)',
+                            debug_error: err.message
+                        });
+                    });
                 })
                 .then(data => {
                     Swal.close();
@@ -728,20 +797,33 @@
                     }
                 })
                 .catch(error => {
+                    clearTimeout(timeout);
                     console.error('Error loading quick report:', error);
                     Swal.close();
 
                     let errorMessage = 'Failed to load report data. Please try again.';
-                    if (error.errors) {
+                    
+                    // Handle abort error (timeout)
+                    if (error.name === 'AbortError') {
+                        errorMessage = 'Request timeout (> 2 minutes). The date range may contain too much data. Try a shorter date range.';
+                    } else if (error.errors) {
                         errorMessage = Object.values(error.errors).flat().join(', ');
                     } else if (error.message) {
                         errorMessage = error.message;
+                    } else if (error.debug_error) {
+                        errorMessage = error.message + '\nDebug: ' + error.debug_error;
                     }
 
+                    // Specific handling for 422 (date range error)
+                    const iconType = error.message && error.message.includes('3 months') ? 'warning' : 'error';
+
                     Swal.fire({
-                        icon: 'error',
-                        title: 'Error',
-                        text: errorMessage
+                        icon: iconType,
+                        title: error.message && error.message.includes('3 months') ? 'Date Range Error' : 'Error',
+                        text: errorMessage,
+                        didOpen: () => {
+                            console.error('Full error object:', error);
+                        }
                     });
                 });
         }

@@ -291,6 +291,8 @@
             $('#btnAdd').on('click', function() {
                 clearForm();
                 $('#modalTitle').text('Add Device');
+                // Set Device ID field to editable when adding new device
+                $('#device_id').prop('readonly', false);
                 sensorModal.show();
             });
 
