@@ -8,6 +8,7 @@ use App\Models\CategoryModel;
 use App\Models\DeviceModel;
 use App\Models\DataModel;
 use App\Models\GuidanceModel;
+use App\Models\LatestDataModel;
 use App\Models\LogsModel;
 use App\Models\ParameterModel;
 use App\Models\SensorModel;
@@ -39,7 +40,7 @@ class UserController extends Controller
     {
         $userId = Auth::user()->id;
         $cacheKey = "user:{$userId}:devices:home";
-        $cacheTTL = 5; // Cache 5 menit
+        $cacheTTL = 2; // Cache 2 menit
 
         // Check if cached
         if (Cache::has($cacheKey)) {
@@ -77,7 +78,7 @@ class UserController extends Controller
         }
 
         // STEP 3: Bulk fetch latest data (1 query dengan subquery)
-        $latestDataIds = DataModel::select(DB::raw('MAX(id) as id'))
+        $latestDataIds = LatestDataModel::select(DB::raw('MAX(id) as id'))
             ->whereIn('device_id', array_unique($deviceIds))
             ->whereIn('parameter_name', array_unique($paramNames))
             ->groupBy('device_id', 'parameter_name')
@@ -114,7 +115,7 @@ class UserController extends Controller
         }
 
         // STEP 4: Fetch actual data rows (1 query)
-        $latestDataCollection = DataModel::whereIn('id', $latestDataIds->unique())
+        $latestDataCollection = LatestDataModel::whereIn('id', $latestDataIds->unique())
             ->get()
             ->keyBy(function ($item) {
                 return $item->device_id . '|' . $item->parameter_name;
@@ -243,7 +244,7 @@ class UserController extends Controller
     public function getMapsDashboard($deviceId)
     {
         $cacheKey = "device:{$deviceId}:maps";
-        $cacheTTL = 3; // Cache 3 menit
+        $cacheTTL = 1; // Cache 1 menit
 
         if (Cache::has($cacheKey)) {
             return response()->json(Cache::get($cacheKey));
@@ -305,14 +306,14 @@ class UserController extends Controller
 
         // STEP 2: Get LATEST data untuk SEMUA sensor sekaligus (1 query, bukan N query!)
         // Gunakan MAX(id) per parameter_name untuk efficiency
-        $latestDataIds = DataModel::select(DB::raw('MAX(id) as id'))
+        $latestDataIds = LatestDataModel::select(DB::raw('MAX(id) as id'))
             ->where('device_id', $deviceId)
             ->whereIn('parameter_name', $sensors->keys()->toArray())
             ->groupBy('parameter_name')
             ->pluck('id');
 
         // STEP 3: Fetch actual data rows (1 query)
-        $latestDataCollection = DataModel::whereIn('id', $latestDataIds)
+        $latestDataCollection = LatestDataModel::whereIn('id', $latestDataIds)
             ->get()
             ->keyBy('parameter_name'); // Key by parameter_name untuk easy lookup
 
@@ -346,7 +347,7 @@ class UserController extends Controller
         }
 
         $cacheKey = "device:{$deviceId}:chart:line:{$parameter}";
-        $cacheTTL = 2; // Cache 2 menit untuk chart
+        $cacheTTL = 1; // Cache 1 menit untuk chart
 
         if (Cache::has($cacheKey)) {
             return response()->json(Cache::get($cacheKey));
@@ -437,7 +438,7 @@ class UserController extends Controller
         }
 
         $cacheKey = "device:{$deviceId}:chart:bar:{$parameter}";
-        $cacheTTL = 2; // Cache 2 menit
+        $cacheTTL = 5; // Cache 5 menit
 
         if (Cache::has($cacheKey)) {
             return response()->json(Cache::get($cacheKey));
@@ -494,7 +495,7 @@ class UserController extends Controller
     {
         try {
             $cacheKey = "device:{$deviceId}:windrose";
-            $cacheTTL = 3; // Cache 3 menit
+            $cacheTTL = 5; // Cache 5 menit
 
             if (Cache::has($cacheKey)) {
                 return response()->json(Cache::get($cacheKey));

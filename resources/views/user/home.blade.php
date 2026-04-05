@@ -30,7 +30,8 @@
                 </div>
             </div>
             <div class="card mt-3">
-                <div class="card-header d-flex justify-content-between align-items-center" style="background-color: #DAD7D7">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                    style="background-color: #DAD7D7">
                     <h5 class="mb-0" id="categoryTitle">
                         <i class="fas fa-info-circle"></i> Legend
                     </h5>
@@ -261,9 +262,6 @@
                     });
                 }
 
-
-
-
                 // Function to fetch and update device data
                 function fetchDeviceData() {
                     fetch("{{ route('user.devices_data') }}")
@@ -349,7 +347,9 @@
                                     }
                                     sensorsHtml += `</tbody></table>`;
 
-                                    const marker = L.marker([item.lat, item.lng], { icon: icon });
+                                    const marker = L.marker([item.lat, item.lng], {
+                                        icon: icon
+                                    });
                                     marker.bindPopup(
                                         `<div style="min-width: 200px;">
                                             <h6><strong>${item.device.device_id}</strong></h6>
@@ -360,7 +360,11 @@
                                         </div>`
                                     );
 
-                                    markers.push({ marker, device: item.device, category: item.category });
+                                    markers.push({
+                                        marker,
+                                        device: item.device,
+                                        category: item.category
+                                    });
                                     allMarkers[item.category].push(marker);
 
                                 } else {
@@ -374,7 +378,8 @@
                                         const offsetLat = item.lat + (radius * Math.cos(angle));
                                         const offsetLng = item.lng + (radius * Math.sin(angle));
 
-                                        const icon = createDeviceIcon(item.categoryIcon, item.device);
+                                        const icon = createDeviceIcon(item.categoryIcon, item
+                                            .device);
 
                                         let sensorsHtml = `<br>
                                             <table class="table table-sm table-bordered">
@@ -383,7 +388,8 @@
                                                 </thead>
                                                 <tbody>
                                             `;
-                                        if (item.device.sensors && item.device.sensors.length > 0) {
+                                        if (item.device.sensors && item.device.sensors.length >
+                                            0) {
                                             item.device.sensors.forEach(sensor => {
                                                 sensorsHtml +=
                                                     `<tr>
@@ -398,7 +404,9 @@
                                         }
                                         sensorsHtml += `</tbody></table>`;
 
-                                        const marker = L.marker([offsetLat, offsetLng], { icon: icon });
+                                        const marker = L.marker([offsetLat, offsetLng], {
+                                            icon: icon
+                                        });
 
                                         const popupContent = `<div style="min-width: 200px;">
                                             <h6><strong>${item.device.device_id}</strong></h6>
@@ -411,7 +419,11 @@
 
                                         marker.bindPopup(popupContent);
 
-                                        markers.push({ marker, device: item.device, category: item.category });
+                                        markers.push({
+                                            marker,
+                                            device: item.device,
+                                            category: item.category
+                                        });
                                         allMarkers[item.category].push(marker);
                                     });
                                 }
@@ -446,8 +458,24 @@
                 // Initial fetch
                 fetchDeviceData();
 
-                // Refresh data every 1 minute (60000 milliseconds)
-                setInterval(fetchDeviceData, 60000);
+                // Gantikan setInterval dengan scheduler yang sinkron dengan jam komputer
+                function scheduleDeviceDataFetch() {
+                    function scheduleNextFetch() {
+                        // Hitung ms sampai awal menit berikutnya
+                        const now = new Date();
+                        const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+
+                        setTimeout(function() {
+                            fetchDeviceData(); // Jalankan fetch data di awal menit berikutnya
+                            scheduleNextFetch();
+                        }, msUntilNextMinute);
+                    }
+
+                    scheduleNextFetch(); // Mulai scheduler tanpa double fetch saat initial load
+                }
+
+                // Panggil untuk mulai refresh tiap menit
+                scheduleDeviceDataFetch();
 
             } else {
                 console.error('Leaflet library not loaded');

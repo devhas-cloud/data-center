@@ -86,7 +86,8 @@
         <!-- Card Bar Chart dengan Button Parameter -->
         <div class="col-lg-6 col-md-12 mb-2">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center" style="background-color: #DAD7D7">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                    style="background-color: #DAD7D7">
                     <h5 class="mb-0">
                         <i class="bi bi-bar-chart-fill"></i> Hourly Average
                     </h5>
@@ -122,7 +123,8 @@
     <div class="row mb-4" id="windRoseRow" style="display: none;">
         <div class="col-lg-12 col-md-12 mb-2">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center" style="background-color: #DAD7D7">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                    style="background-color: #DAD7D7">
                     <h5 class="mb-0">
                         <i class="bi bi-compass"></i> Wind Rose - Wind Direction Distribution
                     </h5>
@@ -190,7 +192,7 @@
         </div>
     </div>
 
-   
+
 
     <!-- Load required libraries -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
@@ -217,7 +219,7 @@
             .input-group-sm {
                 width: 100%;
             }
-            
+
             #loadHistoricalChart {
                 width: 100%;
             }
@@ -959,7 +961,8 @@
                     })
                     .then(response => response.json())
                     .then(data => {
-                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values
+                            .length ===
                             0) {
                             setLoaderNoData('lineChartLoader', 'No data available');
                             document.getElementById('sensorLineChart').style.display = 'none';
@@ -974,7 +977,8 @@
                         if (sensorLineChart && data.labels && data.values) {
                             sensorLineChart.data.labels = data.labels;
                             sensorLineChart.data.datasets[0].data = data.values;
-                            sensorLineChart.data.datasets[0].label = `${data.parameter_label} (${data.unit || ''})`;
+                            sensorLineChart.data.datasets[0].label =
+                                `${data.parameter_label} (${data.unit || ''})`;
                             sensorLineChart.options.scales.y.title.text =
                                 `${data.parameter_label} (${data.unit || ''})`;
 
@@ -1000,7 +1004,7 @@
                             };
 
                             sensorLineChart.update();
-                            
+
                             // Update regulation limits if enabled
                             if (showRegulationLimits) {
                                 updateRegulationLimitsChart();
@@ -1137,12 +1141,12 @@
                                         sensorLineChart.data.datasets[0].data.splice(0, removeCount);
                                         console.log('Line Chart - Removed', removeCount,
                                             'old data points (>24h)');
-                                        
+
                                         // Update Regulation Limits if they are visible
                                         if (showRegulationLimits) {
                                             updateRegulationLimitsChart();
                                         }
-                                        
+
                                         sensorLineChart.update('active');
                                     }
                                 }
@@ -1167,7 +1171,7 @@
             function toggleRegulationLimitsChart() {
                 showRegulationLimits = !showRegulationLimits;
                 const button = document.getElementById('regulationLimitsChart');
-                
+
                 if (showRegulationLimits) {
                     button.classList.remove('btn-outline-secondary');
                     button.classList.add('btn-secondary');
@@ -1175,18 +1179,18 @@
                     button.classList.remove('btn-secondary');
                     button.classList.add('btn-outline-secondary');
                 }
-                
+
                 updateRegulationLimitsChart();
             }
 
             function updateRegulationLimitsChart() {
                 if (!sensorLineChart) return;
-                
+
                 // Remove existing regulation limit datasets
-                sensorLineChart.data.datasets = sensorLineChart.data.datasets.filter(ds => 
+                sensorLineChart.data.datasets = sensorLineChart.data.datasets.filter(ds =>
                     !ds.label || (!ds.label.includes('Max Limit') && !ds.label.includes('Min Limit'))
                 );
-                
+
                 if (showRegulationLimits && currentSelectedParameter) {
                     // Get indicator range from active parameter button
                     const activeButton = document.querySelector('.parameter-btn.active');
@@ -1195,11 +1199,11 @@
                         const minLimit = parseFloat(activeButton.getAttribute('data-indicator-min'));
                         const unit = activeButton.getAttribute('data-unit') || '';
                         const labels = sensorLineChart.data.labels;
-                        
+
                         // Add max limit line
                         if (maxLimit && !isNaN(maxLimit)) {
                             const maxLimitData = new Array(labels.length).fill(maxLimit);
-                            
+
                             sensorLineChart.data.datasets.push({
                                 label: `Max Limit (${maxLimit} ${unit})`,
                                 data: maxLimitData,
@@ -1212,11 +1216,11 @@
                                 tension: 0
                             });
                         }
-                        
+
                         // Add min limit line
                         if (minLimit !== null && minLimit !== '' && !isNaN(minLimit)) {
                             const minLimitData = new Array(labels.length).fill(minLimit);
-                            
+
                             sensorLineChart.data.datasets.push({
                                 label: `Min Limit (${minLimit} ${unit})`,
                                 data: minLimitData,
@@ -1231,7 +1235,7 @@
                         }
                     }
                 }
-                
+
                 sensorLineChart.update();
             }
 
@@ -1388,7 +1392,8 @@
                     })
                     .then(response => response.json())
                     .then(data => {
-                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values
+                            .length ===
                             0) {
                             setLoaderNoData('barChartLoader', 'No data available');
                             document.getElementById('sensorBarChart').style.display = 'none';
@@ -1420,7 +1425,7 @@
                                 };
 
                                 sensorBarChart.update();
-                                
+
                                 // Update regulation limits if enabled
                                 if (showRegulationLimitsBar) {
                                     updateRegulationLimitsBar();
@@ -1532,12 +1537,12 @@
 
                                     if (hasChanges) {
                                         console.log('Bar Chart Update - Updated existing hour values');
-                                        
+
                                         // Update Regulation Limits if they are visible
                                         if (showRegulationLimitsBar) {
                                             updateRegulationLimitsBar();
                                         }
-                                        
+
                                         sensorBarChart.options.animation = {
                                             duration: 500,
                                             easing: 'easeInOutQuad'
@@ -1567,7 +1572,7 @@
             function toggleRegulationLimitsBar() {
                 showRegulationLimitsBar = !showRegulationLimitsBar;
                 const button = document.getElementById('regulationLimitsBar');
-                
+
                 if (showRegulationLimitsBar) {
                     button.classList.remove('btn-outline-secondary');
                     button.classList.add('btn-secondary');
@@ -1575,18 +1580,18 @@
                     button.classList.remove('btn-secondary');
                     button.classList.add('btn-outline-secondary');
                 }
-                
+
                 updateRegulationLimitsBar();
             }
 
             function updateRegulationLimitsBar() {
                 if (!sensorBarChart) return;
-                
+
                 // Remove existing regulation limit datasets
-                sensorBarChart.data.datasets = sensorBarChart.data.datasets.filter(ds => 
+                sensorBarChart.data.datasets = sensorBarChart.data.datasets.filter(ds =>
                     !ds.label || (!ds.label.includes('Max Limit') && !ds.label.includes('Min Limit'))
                 );
-                
+
                 if (showRegulationLimitsBar && currentSelectedBarParameter) {
                     // Get indicator range from active parameter button
                     const activeButton = document.querySelector('.bar-parameter-btn.active');
@@ -1595,11 +1600,11 @@
                         const minLimit = parseFloat(activeButton.getAttribute('data-indicator-min'));
                         const unit = activeButton.getAttribute('data-unit') || '';
                         const labels = sensorBarChart.data.labels;
-                        
+
                         // Add max limit line
                         if (maxLimit && !isNaN(maxLimit)) {
                             const maxLimitData = new Array(labels.length).fill(maxLimit);
-                            
+
                             sensorBarChart.data.datasets.push({
                                 label: `Max Limit (${maxLimit} ${unit})`,
                                 data: maxLimitData,
@@ -1614,11 +1619,11 @@
                                 order: 0
                             });
                         }
-                        
+
                         // Add min limit line
                         if (minLimit !== null && minLimit !== '' && !isNaN(minLimit)) {
                             const minLimitData = new Array(labels.length).fill(minLimit);
-                            
+
                             sensorBarChart.data.datasets.push({
                                 label: `Min Limit (${minLimit} ${unit})`,
                                 data: minLimitData,
@@ -1635,7 +1640,7 @@
                         }
                     }
                 }
-                
+
                 sensorBarChart.update();
             }
 
@@ -1771,7 +1776,9 @@
                         showlegend: false
                     };
 
-                    Plotly.newPlot("windRoseChart", [trace], layout, {displaylogo: false});
+                    Plotly.newPlot("windRoseChart", [trace], layout, {
+                        displaylogo: false
+                    });
 
                 } catch (e) {
                     if (e.name === 'AbortError') {
@@ -2088,7 +2095,7 @@
                 // Fetch chart data from API
                 fetch(`/user/historical-chart-data/${deviceId}?parameter=${encodeURIComponent(parameterName)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`, {
                         method: 'GET',
-                    signal,
+                        signal,
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -2097,7 +2104,8 @@
                     })
                     .then(response => response.json())
                     .then(data => {
-                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values.length ===
+                        if (!data || !data.labels || !data.values || data.labels.length === 0 || data.values
+                            .length ===
                             0) {
                             setLoaderNoData('historicalChartLoader', 'No data available');
                             document.getElementById('historicalLineChart').style.display = 'none';
@@ -2190,7 +2198,7 @@
                 // Fetch data using progress bar API (contains parameter info)
                 fetch(`/user/progress-bar/${currentDeviceId}`, {
                         method: 'GET',
-                    signal: createEndpointSignal('reference'),
+                        signal: createEndpointSignal('reference'),
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -2237,7 +2245,7 @@
                 // Fetch data using progress bar API
                 fetch(`/user/progress-bar/${currentDeviceId}`, {
                         method: 'GET',
-                    signal: createEndpointSignal('referenceBar'),
+                        signal: createEndpointSignal('referenceBar'),
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute(
@@ -2363,37 +2371,77 @@
                 });
 
             // Auto refresh data every 60 seconds
-            setInterval(function() {
-                if (currentDeviceId) {
-                    if (isSwitchingDevice) {
-                        return;
-                    }
+            function startMinuteRefresh() {
+                function refresh() {
+                    try {
+                        if (!currentDeviceId || isSwitchingDevice) {
+                            scheduleNext();
+                            return;
+                        }
 
-                    const requestId = activeDeviceRequestId;
+                        const requestId = activeDeviceRequestId;
 
-                    // Refresh map with fresh device status
-                    loadMapData(currentDeviceId, requestId);
+                        // Refresh map
+                        try {
+                            loadMapData(currentDeviceId, requestId);
+                        } catch (e) {
+                            console.error("Map error:", e);
+                        }
 
-                    // Refresh progress bars
-                    loadProgressBarData(currentDeviceId, requestId);
+                        // Refresh progress bars
+                        try {
+                            loadProgressBarData(currentDeviceId, requestId);
+                        } catch (e) {
+                            console.error("Progress bar error:", e);
+                        }
 
-                    // Refresh line chart if parameter is selected (smooth update)
-                    if (currentSelectedParameter) {
-                        loadLineChartDataSmooth(currentDeviceId, currentSelectedParameter);
-                    }
+                        // Refresh line chart
+                        if (currentSelectedParameter) {
+                            try {
+                                loadLineChartDataSmooth(currentDeviceId, currentSelectedParameter);
+                            } catch (e) {
+                                console.error("Line chart error:", e);
+                            }
+                        }
 
-                    // Refresh bar chart if parameter is selected (smooth update)
-                    if (currentSelectedBarParameter) {
-                        loadBarChartDataSmooth(currentDeviceId, currentSelectedBarParameter);
-                    }
+                        // Refresh bar chart
+                        if (currentSelectedBarParameter) {
+                            try {
+                                loadBarChartDataSmooth(currentDeviceId, currentSelectedBarParameter);
+                            } catch (e) {
+                                console.error("Bar chart error:", e);
+                            }
+                        }
 
-                    // Refresh wind rose if visible
-                    const windRoseRow = document.getElementById('windRoseRow');
-                    if (windRoseRow && windRoseRow.style.display !== 'none') {
-                        renderWindRose(requestId);
+                        // Refresh wind rose if visible
+                        const windRoseRow = document.getElementById('windRoseRow');
+                        if (windRoseRow && windRoseRow.style.display !== 'none') {
+                            try {
+                                renderWindRose(requestId);
+                            } catch (e) {
+                                console.error("Wind rose error:", e);
+                            }
+                        }
+
+                    } catch (globalError) {
+                        console.error("Unexpected error in refresh:", globalError);
+                    } finally {
+                        scheduleNext(); // Ensure the schedule continues
                     }
                 }
-            }, 60000);
+
+                function scheduleNext() {
+                    const now = new Date();
+                    // Calculate ms until the start of the next minute
+                    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+                    setTimeout(refresh, msUntilNextMinute);
+                }
+
+                scheduleNext(); // Start the process
+            }
+
+            // Panggil untuk memulai refresh tiap menit
+            startMinuteRefresh();
         });
     </script>
 @endsection
