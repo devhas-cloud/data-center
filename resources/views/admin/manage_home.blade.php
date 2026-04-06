@@ -561,7 +561,7 @@
                                 if (devicesAtLocation.length === 1) {
                                     // Single device at this location - no offset needed
                                     const item = devicesAtLocation[0];
-                                    const icon = createDeviceIcon(item.categoryIcon, item.device);
+                                    const icon = createDeviceIcon(item.categoryIcon, item.device.status);
                                     const marker = L.marker([item.lat, item.lng], {
                                         icon: icon
                                     });
@@ -594,7 +594,7 @@
                                         const offsetLng = item.lng + (radius * Math.sin(angle));
 
                                         const icon = createDeviceIcon(item.categoryIcon, item
-                                            .device);
+                                            .device.status);
 
                                         const marker = L.marker([offsetLat, offsetLng], {
                                             icon: icon
