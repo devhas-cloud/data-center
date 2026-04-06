@@ -35,6 +35,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
     // Home management
     Route::get('/admin/home', [AdminHomeController::class, 'manageHome'])->name('admin.home');
+    Route::get('/admin/devices-data', [AdminHomeController::class, 'getAdminDevicesData'])->name('admin.devices_data');
     Route::get('/admin/device-latest-data/{deviceId}', [AdminHomeController::class, 'getLatestData'])->name('admin.device_latest_data');
     
     // Dashboard management

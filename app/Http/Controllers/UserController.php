@@ -18,8 +18,6 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Nette\Utils\Json;
-
 use Illuminate\Support\Facades\Cache;
 
 //use Dompdf\Dompdf;
@@ -47,85 +45,46 @@ class UserController extends Controller
             return response()->json(Cache::get($cacheKey));
         }
 
-        // STEP 1: Eager load dengan optimized relationships
+        // STEP 1: Eager load dengan select spesifik (Hemat Memory & Query)
+        // Hanya ambil kolom yang dibutuhkan, jangan select(*)
         $userAccess = AccessModel::where('user_id', $userId)
-            ->with(['category', 'device.sensors'])
-            ->get();
+            ->with([
+                'category:id,category_name,category_icon',
+                'device:id,device_id,device_name,latitude,longitude,device_gap_timeout',
+                'device.sensors:id,device_id,parameter_name'
+            ])
+            ->get(['id', 'user_id', 'category_id', 'device_id']); // Select parent columns
 
-        // Early exit jika tidak ada data
+        // Early exit jika tidak ada data akses
         if ($userAccess->isEmpty()) {
             Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
             return response()->json([]);
         }
 
-        // STEP 2: Collect device IDs dan parameter names dalam 1 loop
-        $deviceIds = [];
-        $paramNames = [];
-        
-        $userAccess->each(function ($access) use (&$deviceIds, &$paramNames) {
-            if ($access->device) {
-                $deviceIds[] = $access->device->device_id;
-                $access->device->sensors->each(function ($sensor) use (&$paramNames) {
-                    $paramNames[] = $sensor->parameter_name;
-                });
-            }
-        });
+        // STEP 2: Collect device IDs dan parameter names menggunakan Pluck (Lebih Cepat)
+        // pluck() jauh lebih efisien daripada loop foreach
+        $deviceIds = $userAccess->pluck('device.device_id')->filter()->unique()->toArray();
 
-        // Early exit jika tidak ada sensors
-        if (empty($deviceIds) || empty($paramNames)) {
+        // Early exit jika struktur data tidak lengkap
+        if (empty($deviceIds)) {
             Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
             return response()->json([]);
         }
+      
+        // STEP 3: Fetch actual data rows
+        // Jika ID kosong, return collection kosong agar tidak error di whereIn
 
-        // STEP 3: Bulk fetch latest data (1 query dengan subquery)
-        $latestDataIds = LatestDataModel::select(DB::raw('MAX(id) as id'))
-            ->whereIn('device_id', array_unique($deviceIds))
-            ->whereIn('parameter_name', array_unique($paramNames))
-            ->groupBy('device_id', 'parameter_name')
-            ->pluck('id');
-
-        // Early exit jika tidak ada latest data
-        if ($latestDataIds->isEmpty()) {
-            // Return structure tanpa latest values
-            $result = $userAccess->groupBy('category.category_name')
-                ->map(function ($group) {
-                    $category = $group->first()->category;
-                    if (!$category) return null;
-                    
-                    $devices = $group->map(function ($access) {
-                        return [
-                            'device_id' => $access->device->device_id,
-                            'device_name' => $access->device->device_name,
-                            'latitude' => $access->device->latitude,
-                            'longitude' => $access->device->longitude,
-                            'status' => $this->DeviceStatus($access->device->device_id, $access->device->device_gap_timeout),
-                            'sensors' => [],
-                        ];
-                    })->toArray();
-                    
-                    return [
-                        'device_category' => $category->category_name,
-                        'category_icon' => $category->category_icon,
-                        'devices' => $devices,
-                    ];
-                })->filter()->values();
-            
-            Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
-            return response()->json($result);
-        }
-
-        // STEP 4: Fetch actual data rows (1 query)
-        $latestDataCollection = LatestDataModel::whereIn('id', $latestDataIds->unique())
-            ->get()
-            ->keyBy(function ($item) {
-                return $item->device_id . '|' . $item->parameter_name;
-            });
-
-        // STEP 5: Build response menggunakan collection methods (memory operations, no queries)
+        $latestDataCollection = LatestDataModel::whereIn('device_id', $deviceIds)
+                ->get()
+                ->keyBy(function ($item) {
+                    return $item->device_id . '|' . $item->parameter_name;
+                });
+      
         $result = $userAccess->groupBy('category.category_name')
             ->map(function ($group) use ($latestDataCollection) {
                 $category = $group->first()->category;
-                
+
+                // Skip jika kategori null
                 if (!$category) {
                     return null;
                 }
@@ -134,50 +93,47 @@ class UserController extends Controller
                     return $access->device !== null;
                 })->map(function ($access) use ($latestDataCollection) {
                     $device = $access->device;
-                    
+
                     $sensorsData = $device->sensors->map(function ($sensor) use ($device, $latestDataCollection) {
                         $key = $device->device_id . '|' . $sensor->parameter_name;
                         $latestData = $latestDataCollection->get($key);
-                        
-                        return $latestData ? [
+
+                        // Jika tidak ada latest data, return null (akan difilter di bawah)
+                        if (!$latestData) {
+                            return null;
+                        }
+
+                        return [
                             'parameter_name' => $sensor->parameter_name,
-                            'latest_value' => $latestData->value,
-                            'recorded_at' => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
-                        ] : null;
-                    })->filter()->values();
-                    
+                            'latest_value'   => $latestData->value,
+                            'recorded_at'    => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
+                        ];
+                    })->filter()->values(); // Hapus null dan re-index
+
                     return [
-                        'device_id' => $device->device_id,
+                        'device_id'   => $device->device_id,
                         'device_name' => $device->device_name,
-                        'latitude' => $device->latitude,
-                        'longitude' => $device->longitude,
-                        'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
-                        'sensors' => $sensorsData->toArray(),
+                        'latitude'    => $device->latitude,
+                        'longitude'   => $device->longitude,
+                        'status'      => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                        'sensors'     => $sensorsData->toArray(),
                     ];
                 })->values();
 
-                return !$devices->isEmpty() ? [
+                // Return null jika tidak ada device valid di kategori ini
+                return $devices->isEmpty() ? null : [
                     'device_category' => $category->category_name,
-                    'category_icon' => $category->category_icon,
-                    'devices' => $devices->toArray(),
-                ] : null;
-            })->filter()->values();
+                    'category_icon'   => $category->category_icon,
+                    'devices'         => $devices->toArray(),
+                ];
+            })->filter()->values(); // Hapus kategori null dan re-index hasil akhir
 
-        // Cache hasil selama 5 menit
+        // Simpan cache
         Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
 
         return response()->json($result);
     }
 
-
-    public function getCategoryDevices($categoryName)
-    {
-        $devices = DeviceModel::where('device_category', $categoryName)
-            ->where('user_assigned', Auth::user()->username)
-            ->get();
-
-        return $devices;
-    }
 
     public function DeviceStatus($deviceId, $gapTimeout = 3)
     {
@@ -190,7 +146,7 @@ class UserController extends Controller
         //     $statusMessage = "Offline";
         // }
         # Perbaiki metode pengecekan status dimana jika data terakhir lebih dari 6 menit yang lalu, maka dianggap offline
-        
+
         $latestData = DataModel::where('device_id', $deviceId)->orderBy('timestamp', 'desc')->first();
         if (!$latestData) {
             return "Offline";
@@ -210,33 +166,58 @@ class UserController extends Controller
     {
 
         $userId = Auth::user()->id;
-        $accessibleCategoryIds = AccessModel::where('user_id', $userId)
-            ->distinct()
-            ->pluck('category_id')
-            ->toArray();
+        $cacheKey = "user:{$userId}:devices:dashboard";
+        $cacheTTL = 5; // Cache 5 menit
 
-        $deviceCategories = CategoryModel::whereIn('id', $accessibleCategoryIds)
-            ->with(['devices' => function ($query) {
-                $query->orderBy('device_id', 'asc');
-            }])
-            ->orderBy('category_name', 'asc')
-            ->get()
-            ->map(function ($category) {
-                return [
+        // Check if cached
+        if (Cache::has($cacheKey)) {
+            return view('user.dashboard', ['deviceCategories' => Cache::get($cacheKey)]);
+        }
+
+        // STEP 1: Eager load dengan optimized relationships
+        $userAccess = AccessModel::where('user_id', $userId)
+            ->with(['category', 'device'])
+            ->get();
+
+        // Early exit jika tidak ada data
+        if ($userAccess->isEmpty()) {
+            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
+            return view('user.dashboard', ['deviceCategories' => []]);
+        }
+
+        // STEP 2: Build response dengan collection methods (memory operations, no queries)
+        $deviceCategories = $userAccess->groupBy('category.category_name')
+            ->map(function ($group) {
+                $category = $group->first()->category;
+
+                if (!$category) {
+                    return null;
+                }
+
+                $devices = $group->filter(function ($access) {
+                    return $access->device !== null;
+                })->map(function ($access) {
+                    $device = $access->device;
+
+                    return [
+                        'device_id' => $device->device_id,
+                        'device_name' => $device->device_name,
+                        'location' => $device->location,
+                        'latitude' => $device->latitude,
+                        'longitude' => $device->longitude,
+                        'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                    ];
+                })->values();
+
+                return !$devices->isEmpty() ? [
                     'device_category' => $category->category_name,
                     'category_icon' => $category->category_icon,
-                    'devices' => $category->devices->map(function ($device) {
-                        return [
-                            'device_id' => $device->device_id,
-                            'device_name' => $device->device_name,
-                            'location' => $device->location,
-                            'latitude' => $device->latitude,
-                            'longitude' => $device->longitude,
-                            'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
-                        ];
-                    })->toArray(),
-                ];
-            })->toArray();
+                    'devices' => $devices->toArray(),
+                ] : null;
+            })->filter()->values()->toArray();
+
+        // Cache hasil selama 5 menit
+        Cache::put($cacheKey, $deviceCategories, now()->addMinutes($cacheTTL));
 
         return view('user.dashboard', ['deviceCategories' => $deviceCategories]);
     }
@@ -320,7 +301,7 @@ class UserController extends Controller
         // STEP 4: Build response dengan data yang sudah di-load di memory
         $data = $sensors->map(function ($sensor) use ($latestDataCollection) {
             $latestData = $latestDataCollection->get($sensor->parameter_name);
-            
+
             return [
                 'parameter_label' => $sensor->parameter_label,
                 'parameter_name' => $sensor->parameter_name,
@@ -477,7 +458,7 @@ class UserController extends Controller
             $labels[] = $item->hour;
             $values[] = round(floatval($item->avg_value), 2);
         }
-        
+
         $chartData = [
             'labels' => $labels,
             'values' => $values,
@@ -629,7 +610,7 @@ class UserController extends Controller
                 $values[] = round(floatval($item->value), 2);
                 $previousTime = $currentTime;
             }
-            
+
             $chartData = [
                 'labels' => $labels,
                 'values' => $values,
@@ -655,31 +636,53 @@ class UserController extends Controller
 
     public function deviceInfo()
     {
-
         $userId = Auth::user()->id;
-        $accessibleCategoryIds = AccessModel::where('user_id', $userId)
-            ->distinct()
-            ->pluck('category_id')
-            ->toArray();
+        $cacheKey = "user:{$userId}:device-info";
+        $cacheTTL = 5; // Cache 5 menit
 
-        $result = CategoryModel::whereIn('id', $accessibleCategoryIds)
-            ->with(['devices' => function ($query) {
-                $query->orderBy('device_id', 'asc');
-            }])
-            ->orderBy('category_name', 'asc')
-            ->get()
-            ->map(function ($category) {
-                return [
+        // Check if cached
+        if (Cache::has($cacheKey)) {
+            return view('user.device_info', ['deviceCategories' => Cache::get($cacheKey)]);
+        }
+
+        // STEP 1: Eager load dengan optimized relationships
+        $userAccess = AccessModel::where('user_id', $userId)
+            ->with(['category', 'device'])
+            ->get();
+
+        // Early exit jika tidak ada data
+        if ($userAccess->isEmpty()) {
+            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
+            return view('user.device_info', ['deviceCategories' => []]);
+        }
+
+        // STEP 2: Build response dengan collection methods (memory operations, no queries)
+        $result = $userAccess->groupBy('category.category_name')
+            ->map(function ($group) {
+                $category = $group->first()->category;
+
+                if (!$category) {
+                    return null;
+                }
+
+                $devices = $group->filter(function ($access) {
+                    return $access->device !== null;
+                })->map(function ($access) {
+                    $device = $access->device;
+                    return [
+                        'device_id' => $device->device_id,
+                        'device_name' => $device->device_name,
+                    ];
+                })->values();
+
+                return !$devices->isEmpty() ? [
                     'device_category' => $category->category_name,
-                    'devices' => $category->devices->map(function ($device) {
-                        return [
-                            'device_id' => $device->device_id,
-                            'device_name' => $device->device_name,
-                        ];
-                    })->toArray(),
-                ];
-            })->toArray();
+                    'devices' => $devices->toArray(),
+                ] : null;
+            })->filter()->values()->toArray();
 
+        // Cache hasil selama 5 menit
+        Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
 
         return view('user.device_info', ['deviceCategories' => $result]);
     }
@@ -700,7 +703,7 @@ class UserController extends Controller
         if (!$device) {
             return response()->json(['error' => 'Device not found'], 404);
         }
-        
+
         // Cache latest data per sensor
         $latestDataCacheKey = "device:{$deviceId}:latest";
         if (Cache::has($latestDataCacheKey)) {
@@ -797,54 +800,103 @@ class UserController extends Controller
 
     public function deviceReport()
     {
+        $userId = Auth::user()->id;
+        $cacheKey = "user:{$userId}:device-report";
+        $cacheTTL = 5; // Cache 5 menit
+
+        // Check if cached
+        $cachedData = Cache::get($cacheKey);
+        if ($cachedData !== null) {
+            return view('user.report', array_merge($cachedData, [
+                'accessCrud' => Auth::user()->level === 'advanced'
+            ]));
+        }
+
         $firstDevice = null;
 
-        $userId = Auth::user()->id;
-        $accessibleCategoryIds = AccessModel::where('user_id', $userId)
-            ->distinct()
-            ->pluck('category_id')
-            ->toArray();
+        // STEP 1: Eager load dengan optimized relationships
+        $userAccess = AccessModel::where('user_id', $userId)
+            ->with(['category', 'device'])
+            ->get();
 
-        $result = CategoryModel::whereIn('id', $accessibleCategoryIds)
-            ->with(['devices' => function ($query) {
-                $query->orderBy('device_id', 'asc');
-            }])
-            ->orderBy('category_name', 'asc')
-            ->get()
-            ->map(function ($category) use (&$firstDevice) {
-                return [
+        // Early exit jika tidak ada data
+        if ($userAccess->isEmpty()) {
+            $cacheData = [
+                'deviceCategories' => [],
+                'firstDeviceId' => null,
+            ];
+            Cache::put($cacheKey, $cacheData, now()->addMinutes($cacheTTL));
+            return view('user.report', array_merge($cacheData, [
+                'accessCrud' => Auth::user()->level === 'advanced'
+            ]));
+        }
+
+        // STEP 2: Build response dengan collection methods (memory operations, no queries)
+        $result = $userAccess->groupBy('category.category_name')
+            ->map(function ($group) use (&$firstDevice) {
+                $category = $group->first()->category;
+
+                if (!$category) {
+                    return null;
+                }
+
+                $devices = $group->filter(function ($access) {
+                    return $access->device !== null;
+                })->map(function ($access) use (&$firstDevice) {
+                    $device = $access->device;
+                    if ($firstDevice === null) {
+                        $firstDevice = $device->device_id;
+                    }
+                    return [
+                        'device_id' => $device->device_id
+                    ];
+                })->values();
+
+                return !$devices->isEmpty() ? [
                     'device_category' => $category->category_name,
-                    'devices' => $category->devices->map(function ($device) use (&$firstDevice) {
-                        if ($firstDevice === null) {
+                    'devices' => $devices->toArray(),
+                ] : null;
+            })->filter()->values()->toArray();
 
-                            $firstDevice = $device->device_id;
-                        }
-
-                        return [
-                            'device_id' => $device->device_id
-                        ];
-                    })->toArray(),
-                ];
-            })->toArray();
-
-        $accesCrud = Auth::user()->level === 'advanced' ? true : false;
-        return view('user.report', [
+        $cacheData = [
             'deviceCategories' => $result,
             'firstDeviceId' => $firstDevice,
-            'accessCrud' => $accesCrud,
-        ]);
+        ];
+        Cache::put($cacheKey, $cacheData, now()->addMinutes($cacheTTL));
+
+        return view('user.report', array_merge($cacheData, [
+            'accessCrud' => Auth::user()->level === 'advanced'
+        ]));
     }
 
     public function getDeviceReport()
     {
         try {
+            $userId = Auth::user()->id;
+            $cacheKey = "user:{$userId}:device-reports";
+            $cacheTTL = 2; // Cache 2 menit (data dapat berubah)
+
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey), 200);
+            }
+
             // Get all devices assigned to current user
-            $userDevices = AccessModel::where('user_id', Auth::user()->id)
+            $userDevices = AccessModel::where('user_id', $userId)
                 ->with('device')
                 ->get()
                 ->pluck('device')
                 ->filter(); // Remove null devices
 
+            if ($userDevices->isEmpty()) {
+                $response = [
+                    'success' => true,
+                    'available_devices' => [],
+                    'report' => [],
+                ];
+                Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+                return response()->json($response, 200);
+            }
 
             // Get device IDs that already have reports
             $reportedDeviceIds = AutoReportModel::pluck('device_id')->toArray();
@@ -874,11 +926,14 @@ class UserController extends Controller
                     ];
                 });
 
-            return response()->json([
+            $response = [
                 'success' => true,
                 'available_devices' => $availableDevices,
                 'report' => $reports,
-            ], 200);
+            ];
+
+            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -890,6 +945,14 @@ class UserController extends Controller
     public function getDeviceReportById($id)
     {
         try {
+            $cacheKey = "report:{$id}";
+            $cacheTTL = 5; // Cache 5 menit
+
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey), 200);
+            }
+
             $report = AutoReportModel::find($id);
 
             if (!$report) {
@@ -915,7 +978,7 @@ class UserController extends Controller
                 ], 403);
             }
 
-            return response()->json([
+            $response = [
                 'success' => true,
                 'report' => [
                     'id' => $report->id,
@@ -924,7 +987,10 @@ class UserController extends Controller
                     'email' => $report->email_report,
                     'status' => $report->auto_report,
                 ]
-            ], 200);
+            ];
+
+            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1125,7 +1191,7 @@ class UserController extends Controller
             $startDateObj = Carbon::parse($startDate);
             $endDateObj = Carbon::parse($endDate);
             $daysDifference = $startDateObj->diffInDays($endDateObj);
-            
+
             if ($daysDifference > 90) {
                 return response()->json([
                     'success' => false,
@@ -1675,8 +1741,20 @@ class UserController extends Controller
 
     public function settings()
     {
+        $userId = Auth::user()->id;
+        $cacheKey = "user:{$userId}:settings";
+        $cacheTTL = 10; // Cache 10 menit (data jarang berubah)
+
+        // Check if cached
+        if (Cache::has($cacheKey)) {
+            $cached = Cache::get($cacheKey);
+            return view('user.settings', array_merge($cached, [
+                'accessCrud' => Auth::user()->level === 'advanced'
+            ]));
+        }
+
         $devices = AccessModel::with('device.sensors.parameter')
-            ->where('user_id', Auth::user()->id)
+            ->where('user_id', $userId)
             ->whereHas('device.sensors', function ($query) {
                 $query->where('status', 'active');
             })
@@ -1686,14 +1764,17 @@ class UserController extends Controller
             })
             ->filter(); // Remove null devices
 
-        $profile = User::find(Auth::user()->id);
+        $profile = User::find($userId);
 
-        $accesCrud = Auth::user()->level === 'advanced' ? true : false;
-        return view('user.settings', [
+        $cacheData = [
             'devices' => $devices,
             'profile' => $profile,
-            'accessCrud' => $accesCrud,
-        ]);
+        ];
+        Cache::put($cacheKey, $cacheData, now()->addMinutes($cacheTTL));
+
+        return view('user.settings', array_merge($cacheData, [
+            'accessCrud' => Auth::user()->level === 'advanced'
+        ]));
     }
 
     public function updateProfile(Request $request)
@@ -1912,11 +1993,27 @@ class UserController extends Controller
     public function getLogsData(Request $request)
     {
         try {
+            $userId = Auth::user()->id;
             $deviceId = $request->query('device_id');
             $category = $request->query('category');
             $startDateTime = $request->query('start_date');
             $endDateTime = $request->query('end_date');
             $status = $request->query('status');
+
+            // Build cache key with query parameters
+            $cacheKey = "user:{$userId}:logs:" . md5(json_encode([
+                'device_id' => $deviceId,
+                'category' => $category,
+                'start_date' => $startDateTime,
+                'end_date' => $endDateTime,
+                'status' => $status,
+            ]));
+            $cacheTTL = 1; // Cache 1 menit untuk logs
+
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey), 200);
+            }
 
             // Get all logs for devices accessible by user
             $query = AccessModel::with(['device.logs' => function ($query) use ($category, $startDateTime, $endDateTime, $status) {
@@ -1961,10 +2058,13 @@ class UserController extends Controller
                 ->sortByDesc('datetime')
                 ->values();
 
-            return response()->json([
+            $response = [
                 'success' => true,
                 'data' => $logs,
-            ], 200);
+            ];
+
+            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -1977,8 +2077,17 @@ class UserController extends Controller
     public function getUserDevices()
     {
         try {
+            $userId = Auth::user()->id;
+            $cacheKey = "user:{$userId}:devices-list";
+            $cacheTTL = 10; // Cache 10 menit
+
+            // Check if cached
+            if (Cache::has($cacheKey)) {
+                return response()->json(Cache::get($cacheKey), 200);
+            }
+
             $devices = AccessModel::with('device')
-                ->where('user_id', Auth::user()->id)
+                ->where('user_id', $userId)
                 ->get()
                 ->map(function ($access) {
                     return [
@@ -1990,10 +2099,13 @@ class UserController extends Controller
                 ->unique('device_id')
                 ->values();
 
-            return response()->json([
+            $response = [
                 'success' => true,
                 'data' => $devices,
-            ], 200);
+            ];
+
+            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
