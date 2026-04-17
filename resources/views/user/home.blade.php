@@ -336,7 +336,7 @@
                                         item.device.sensors.forEach(sensor => {
                                             sensorsHtml +=
                                                 `<tr>
-                                                    <td>${sensor.parameter_name}</td>
+                                                    <td>${sensor.parameter_label}</td>
                                                     <td>${sensor.recorded_at}</td>
                                                     <td>${sensor.latest_value}</td>
                                                 </tr>`;

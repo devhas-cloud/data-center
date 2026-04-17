@@ -70,7 +70,7 @@ class UserController extends Controller
             Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
             return response()->json([]);
         }
-      
+
         // STEP 3: Fetch actual data rows
         // Jika ID kosong, return collection kosong agar tidak error di whereIn
 
@@ -79,7 +79,7 @@ class UserController extends Controller
                 ->keyBy(function ($item) {
                     return $item->device_id . '|' . $item->parameter_name;
                 });
-      
+
         $result = $userAccess->groupBy('category.category_name')
             ->map(function ($group) use ($latestDataCollection) {
                 $category = $group->first()->category;
@@ -104,6 +104,7 @@ class UserController extends Controller
                         }
 
                         return [
+                            'parameter_label' => $sensor->parameter ? $sensor->parameter->parameter_label : $sensor->parameter_name,
                             'parameter_name' => $sensor->parameter_name,
                             'latest_value'   => $latestData->value,
                             'recorded_at'    => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
