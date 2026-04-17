@@ -37,7 +37,7 @@ class AdminHomeController extends Controller
         $devicesByCategory = CategoryModel::with(['devices' => function($query) {
             $query->orderBy('device_id');
         }])->get();
-        
+
         $categoryPercentages = CategoryModel::select('category_name')
             ->withCount('devices')
             ->get()
@@ -87,14 +87,14 @@ class AdminHomeController extends Controller
             $devices = DeviceModel::with(['category', 'sensors'])
                 ->where('user_assigned', '=', Auth::user()->id)
                 ->get();
-                
+
 
 
 
         }
 
-    
-        
+
+
 
         return view('admin.manage_home',[
             'totalAll' => $totalAll,
@@ -167,7 +167,7 @@ class AdminHomeController extends Controller
         // Build response dengan sensor data
         $result = $deviceCategories->map(function ($category) use ($latestDataCollection) {
             $category_obj = $category;
-            
+
             // Skip jika kategori null
             if (!$category_obj || !$category_obj->devices) {
                 return null;
@@ -254,12 +254,12 @@ class AdminHomeController extends Controller
                             'parameter_name' => $sensor->parameter_name,
                             'parameter_label' => $sensor->parameter->parameter_label,
                             'latest_value' => $latestData->value,
-                            'recorded_at' => date("Y-m-d H:i", strtotime($latestData->recorded_at)),
+                            'recorded_at' => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
                         ];
                     }
-               
+
             }
-            
+
             return response()->json(['data' => $sensorsData]);
 
         } catch (\Exception $e) {
