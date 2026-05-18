@@ -86,13 +86,13 @@
                                 <!-- Start Date -->
                                 <div class="col-md-2">
                                     <label for="quickStartDate" class="form-label">Start Date</label>
-                                    <input type="text" class="form-control" id="quickStartDate" placeholder="YYYY-MM-DD" required>
+                                    <input type="text" class="form-control" id="quickStartDate" placeholder="YYYY-MM-DD HH:MM" required>
                                 </div>
 
                                 <!-- End Date -->
                                 <div class="col-md-2 mb-1">
                                     <label for="quickEndDate" class="form-label">End Date</label>
-                                    <input type="text" class="form-control" id="quickEndDate" placeholder="YYYY-MM-DD" required>
+                                    <input type="text" class="form-control" id="quickEndDate" placeholder="YYYY-MM-DD HH:MM" required>
                                 </div>
 
                                 <!-- Show Button -->
@@ -120,6 +120,14 @@
                             <table class="table table-bordered table-striped mt-4" id="quickReportTable">
                               <!-- Table headers and body will be populated dynamically -->
                             </table>
+                        </div>
+
+                        <!-- Pagination controls -->
+                        <div id="paginationControls" class="d-flex justify-content-between align-items-center mt-2 px-1" style="display: none !important;">
+                            <div id="paginationInfo" class="text-muted small"></div>
+                            <nav aria-label="Report pagination">
+                                <ul class="pagination pagination-sm mb-0" id="paginationList"></ul>
+                            </nav>
                         </div>
 
 
@@ -183,7 +191,7 @@
 @section('script')
     <!-- Flatpickr Datepicker JS -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    
+
     <script type="text/javascript">
         let currentReportId = null;
         let reportModal = null;
@@ -573,33 +581,40 @@
         let quickReportForm = @json($deviceCategories);
         let currentReportData = null; // Store current report data for export
         let firstDeviceId = @json($firstDeviceId ?? null);
+        let currentPage = 1;  // current pagination page
+        let totalPages  = 1;  // total pages for current query
 
-        // Set default date range (1 day)
+        // Set default date range (yesterday 00:00 → today now)
         const today = new Date();
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
 
         const formatDate = (date) => {
-            const year = date.getFullYear();
+            const year  = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
+            const day   = String(date.getDate()).padStart(2, '0');
             return `${year}-${month}-${day}`;
         };
 
-        // Initialize Flatpickr for Start Date
+        // Default start: yesterday at 00:00; end: today at current time
+        const startDefault = new Date(yesterday);
+        startDefault.setHours(0, 0, 0, 0);
+        const endDefault = new Date(today);
+
+        // Initialize Flatpickr for Start Date (datetime)
         const startDatePicker = flatpickr("#quickStartDate", {
-            dateFormat: "Y-m-d",
-            defaultDate: formatDate(yesterday),
-            minDate: "2020-01-01",
-            maxDate: "today"
+            dateFormat: "Y-m-d H:i",
+            enableTime: true,
+            time_24hr: true,
+            defaultDate: startDefault,
         });
 
-        // Initialize Flatpickr for End Date
+        // Initialize Flatpickr for End Date (datetime)
         const endDatePicker = flatpickr("#quickEndDate", {
-            dateFormat: "Y-m-d",
-            defaultDate: formatDate(today),
-            minDate: "2020-01-01",
-            maxDate: "today"
+            dateFormat: "Y-m-d H:i",
+            enableTime: true,
+            time_24hr: true,
+            defaultDate: endDefault,
         });
 
         // Isikan select device category
@@ -650,7 +665,7 @@
 
             // Auto-load data after a short delay to ensure DOM is ready
             setTimeout(() => {
-                loadQuickReportData();
+                loadQuickReportData(1);
             }, 500);
         }
 
@@ -678,13 +693,14 @@
         // Handle submit form quick report
         document.getElementById('quickReportForm').addEventListener('submit', function(e) {
             e.preventDefault();
-            loadQuickReportData();
+            currentPage = 1; // reset to page 1 on new query
+            loadQuickReportData(1);
         });
 
-        function loadQuickReportData() {
-            const deviceId = document.getElementById('quickDeviceId').value;
+        function loadQuickReportData(page = 1) {
+            const deviceId  = document.getElementById('quickDeviceId').value;
             const startDate = document.getElementById('quickStartDate').value;
-            const endDate = document.getElementById('quickEndDate').value;
+            const endDate   = document.getElementById('quickEndDate').value;
 
             // Validate form
             if (!deviceId || !startDate || !endDate) {
@@ -696,19 +712,7 @@
                 return;
             }
 
-            // Client-side validation: Check date range (31 days max)
-            const startDateObj = new Date(startDate);
-            const endDateObj = new Date(endDate);
-            const daysDifference = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
-            
-            if (daysDifference > 30) {
-                Swal.fire({
-                    icon: 'warning',
-                    title: 'Date Range Too Long',
-                    text: `Hanya bisa dilakukan maksimal 1 bulan. Silakan pilih rentang tanggal yang lebih pendek.`
-                });
-                return;
-            }
+            currentPage = page;
 
             // Show loading
             Swal.fire({
@@ -720,26 +724,25 @@
                 }
             });
 
-            // Fetch data from API - simple URL without pagination params
+            // Build request URL with pagination
             const url = new URL('/user/report-table-data', window.location.origin);
-            url.searchParams.append('device_id', deviceId);
+            url.searchParams.append('device_id',  deviceId);
             url.searchParams.append('start_date', startDate);
-            url.searchParams.append('end_date', endDate);
+            url.searchParams.append('end_date',   endDate);
+            url.searchParams.append('page',       page);
 
-            // Set timeout for long-running queries
+            // Set timeout for long-running queries (3 minutes)
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 120000); // 2 minutes timeout
+            const timeout = setTimeout(() => controller.abort(), 180000);
 
             fetch(url.toString(), { signal: controller.signal })
                 .then(response => {
                     clearTimeout(timeout);
 
                     if (!response.ok) {
-                        // If response is not ok, try to parse as JSON for error message
                         if (response.headers.get('content-type')?.includes('application/json')) {
                             return response.json().then(err => Promise.reject(err));
                         } else {
-                            // If not JSON, return generic error
                             return Promise.reject({
                                 success: false,
                                 message: `Server error (${response.status}): ${response.statusText}`
@@ -747,7 +750,6 @@
                         }
                     }
 
-                    // Check content-type before parsing JSON
                     const contentType = response.headers.get('content-type');
                     if (!contentType || !contentType.includes('application/json')) {
                         return Promise.reject({
@@ -770,18 +772,26 @@
                     if (data.success) {
                         if (data.data && data.data.length > 0) {
                             currentReportData = data; // Store for export
+                            currentPage  = data.current_page;
+                            totalPages   = data.total_pages;
                             displayQuickReportTable(data);
+                            updatePaginationControls(data.current_page, data.total_pages, data.total_records, data.per_page);
+                            const pageInfo = data.total_pages > 1
+                                ? ` (Page ${data.current_page} of ${data.total_pages})`
+                                : '';
                             Swal.fire({
                                 icon: 'success',
                                 title: 'Success',
-                                text: `Loaded ${data.total_records} records`,
+                                text: `Loaded ${data.total_records} records${pageInfo}`,
                                 timer: 2000,
                                 showConfirmButton: false
                             });
                         } else {
-                            // Clear table and stored data
                             currentReportData = null;
+                            currentPage = 1;
+                            totalPages  = 1;
                             document.getElementById('quickReportTable').innerHTML = '';
+                            updatePaginationControls(1, 0, 0, 1000);
                             Swal.fire({
                                 icon: 'info',
                                 title: 'No Data',
@@ -802,10 +812,9 @@
                     Swal.close();
 
                     let errorMessage = 'Failed to load report data. Please try again.';
-                    
-                    // Handle abort error (timeout)
+
                     if (error.name === 'AbortError') {
-                        errorMessage = 'Request timeout (> 2 minutes). The date range may contain too much data. Try a shorter date range.';
+                        errorMessage = 'Request timeout (> 3 minutes). Try a shorter date range or use pagination.';
                     } else if (error.errors) {
                         errorMessage = Object.values(error.errors).flat().join(', ');
                     } else if (error.message) {
@@ -814,18 +823,73 @@
                         errorMessage = error.message + '\nDebug: ' + error.debug_error;
                     }
 
-                    // Specific handling for 422 (date range error)
-                    const iconType = error.message && error.message.includes('3 months') ? 'warning' : 'error';
-
                     Swal.fire({
-                        icon: iconType,
-                        title: error.message && error.message.includes('3 months') ? 'Date Range Error' : 'Error',
-                        text: errorMessage,
-                        didOpen: () => {
-                            console.error('Full error object:', error);
-                        }
+                        icon: 'error',
+                        title: 'Error',
+                        text: errorMessage
                     });
                 });
+        }
+
+        function updatePaginationControls(curPage, totPages, totalRecords, perPage) {
+            const controls = document.getElementById('paginationControls');
+            const info     = document.getElementById('paginationInfo');
+            const list     = document.getElementById('paginationList');
+
+            if (!totPages || totPages <= 1) {
+                controls.style.display = 'none';
+                return;
+            }
+
+            controls.style.display = 'flex';
+
+            const startRecord = ((curPage - 1) * perPage) + 1;
+            const endRecord   = Math.min(curPage * perPage, totalRecords);
+            info.textContent  = `Showing ${startRecord}–${endRecord} of ${totalRecords} records (Page ${curPage} of ${totPages})`;
+
+            list.innerHTML = '';
+
+            // Previous button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${curPage <= 1 ? 'disabled' : ''}`;
+            prevLi.innerHTML = `<a class="page-link" href="#">«</a>`;
+            if (curPage > 1) {
+                prevLi.querySelector('a').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    loadQuickReportData(curPage - 1);
+                });
+            }
+            list.appendChild(prevLi);
+
+            // Page number window (max 5 pages centred around current)
+            let startPage = Math.max(1, curPage - 2);
+            let endPage   = Math.min(totPages, startPage + 4);
+            if (endPage - startPage < 4) {
+                startPage = Math.max(1, endPage - 4);
+            }
+            for (let i = startPage; i <= endPage; i++) {
+                const li  = document.createElement('li');
+                li.className = `page-item ${i === curPage ? 'active' : ''}`;
+                li.innerHTML = `<a class="page-link" href="#">${i}</a>`;
+                const pageNum = i;
+                li.querySelector('a').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    loadQuickReportData(pageNum);
+                });
+                list.appendChild(li);
+            }
+
+            // Next button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${curPage >= totPages ? 'disabled' : ''}`;
+            nextLi.innerHTML = `<a class="page-link" href="#">»</a>`;
+            if (curPage < totPages) {
+                nextLi.querySelector('a').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    loadQuickReportData(curPage + 1);
+                });
+            }
+            list.appendChild(nextLi);
         }
 
         function displayQuickReportTable(reportData) {
@@ -969,33 +1033,33 @@
                             doc.setFontSize(8);
                             doc.text('LOGO', 18, 15);
                         }
-                        
+
                         let yPos = 10;
-                        
+
                         // Title: DATA REPORT
                         doc.setFontSize(16);
                         doc.setFont(undefined, 'bold');
                         doc.setTextColor(33, 37, 41);
                         doc.text('DATA REPORT', 48, yPos);
                         yPos += 5;
-                        
+
                         // Device and Category
                         doc.setFontSize(9);
                         doc.setFont(undefined, 'normal');
                         doc.setTextColor(73, 80, 87);
                         doc.text(`Device: ${currentReportData.device_id} | Category: ${currentReportData.device_category}`, 48, yPos);
                         yPos += 4;
-                        
+
                         // Parameters - auto split if too long
                         const paramLabels = currentReportData.parameters.map(p => p.parameter_label).join(', ');
                         const maxWidth = pageWidth - 48 - 14; // Available width from text start to right margin
                         doc.setFontSize(9);
                         doc.setFont(undefined, 'normal');
-                        
+
                         // Check if parameters fit in one line
                         const paramText = `Parameters: ${paramLabels}`;
                         const paramTextWidth = doc.getTextWidth(paramText);
-                        
+
                         if (paramTextWidth <= maxWidth) {
                             // Fits in one line
                             doc.text(paramText, 48, yPos);
@@ -1004,7 +1068,7 @@
                             // Split into multiple lines
                             doc.text('Parameters:', 48, yPos);
                             yPos += 4;
-                            
+
                             const splitParams = doc.splitTextToSize(paramLabels, maxWidth);
                             splitParams.forEach(line => {
                                 doc.text(line, 48, yPos);
@@ -1012,24 +1076,24 @@
                             });
                             yPos += 0.5;
                         }
-                        
+
                         // Period, Records, and Generated - distributed layout (left, center, right)
                         const periodText = `Period: ${currentReportData.date_range.start} to ${currentReportData.date_range.end}`;
                         const recordsText = `Records: ${currentReportData.total_records}`;
                         const generatedText = `Generated: {{ Date::now()->format('Y-m-d H:i:s') }}`;
-                        
+
                         // Left - Period
                         doc.text(periodText, 48, yPos);
-                        
+
                         // Center - Records
                         const centerX = pageWidth / 2;
                         const recordsWidth = doc.getTextWidth(recordsText);
                         doc.text(recordsText, centerX - (recordsWidth / 2), yPos);
-                        
+
                         // Right - Generated
                         const generatedWidth = doc.getTextWidth(generatedText);
                         doc.text(generatedText, pageWidth - 14 - generatedWidth, yPos);
-                        
+
                         yPos += 2;
 
                         // Add line separator
@@ -1041,18 +1105,18 @@
                     // Footer function
                     const addFooter = (doc, pageNum, totalPages) => {
                         const footerY = pageHeight - 10;
-                        
+
                         // Footer separator line
                         doc.setDrawColor(200, 200, 200);
                         doc.setLineWidth(0.3);
                         doc.line(14, pageHeight - 17, pageWidth - 14, pageHeight - 17);
-                        
+
                         // Left side - Page numbers
                         doc.setFontSize(9);
                         doc.setFont(undefined, 'normal');
                         doc.setTextColor(108, 117, 125);
                         doc.text(`Page ${pageNum} of ${totalPages}`, 14, footerY);
-                        
+
                         // Right side - Powered by text with icon
                         doc.setFontSize(9);
                         doc.setTextColor(52, 58, 64);
@@ -1061,10 +1125,10 @@
                         const iconSize = 10;
                         const totalWidth = textWidth + iconSize + 4;
                         const startX = pageWidth - 14 - totalWidth;
-                        
+
                         // Draw "Powered by" text
                         doc.text(poweredText, startX, footerY+3);
-                        
+
                         // Add icon after "Powered by"
                         try {
                             doc.addImage(poweredByIcon, 'PNG', startX + textWidth + 4, footerY - 3, 12, 10);
@@ -1127,22 +1191,22 @@
                         didDrawPage: function(data) {
                             // Add header on each page
                             addHeader(doc);
-                            
+
                             // Add footer on each page
                             addFooter(doc, data.pageNumber, doc.internal.getNumberOfPages());
                         }
                     });
-                    
+
                     // Update page numbers after table is complete (for accurate total pages)
                     const totalPages = doc.internal.getNumberOfPages();
                     for (let i = 1; i <= totalPages; i++) {
                         doc.setPage(i);
                         const footerY = pageHeight - 10;
-                        
+
                         // Clear previous footer area
                         doc.setFillColor(255, 255, 255);
                         doc.rect(0, footerY - 5, pageWidth, 10, 'F');
-                        
+
                         // Redraw footer with correct page numbers
                         addFooter(doc, i, totalPages);
                     }
@@ -1227,6 +1291,6 @@
             }, 1000);
         }
 
-        
+
     </script>
 @endsection

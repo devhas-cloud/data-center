@@ -1177,41 +1177,34 @@ class UserController extends Controller
     public function getTableDeviceReport(Request $request)
     {
         try {
-            // Validate request - simplified without pagination
+            // Validate request with pagination support
             $validated = $request->validate([
                 'device_id' => 'required|string|exists:tbl_device,device_id',
-                'start_date' => 'required|date',
-                'end_date' => 'required|date|after_or_equal:start_date',
+                'start_date' => 'required|string',
+                'end_date'   => 'required|string',
+                'page'       => 'nullable|integer|min:1',
             ]);
 
-            $deviceId = $validated['device_id'];
+            $deviceId  = $validated['device_id'];
             $startDate = $validated['start_date'];
-            $endDate = $validated['end_date'];
+            $endDate   = $validated['end_date'];
+            $page      = (int) ($validated['page'] ?? 1);
+            $perPage   = 720;
 
-            // Validate date range - maximum 3 months (90 days)
+            // Parse datetimes — supports both "Y-m-d H:i" and "Y-m-d" formats
             $startDateObj = Carbon::parse($startDate);
-            $endDateObj = Carbon::parse($endDate);
-            $daysDifference = $startDateObj->diffInDays($endDateObj);
+            $endDateObj   = Carbon::parse($endDate);
 
-            if ($daysDifference > 90) {
+            if ($startDateObj->greaterThan($endDateObj)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Date range cannot exceed 3 months (90 days). Please select a shorter date range.'
+                    'message' => 'Start date/time must be before or equal to end date/time.'
                 ], 422);
             }
 
-            // Cache key for table report data
-            $cacheKey = "device:{$deviceId}:table-report:{$startDate}:{$endDate}";
-            $cacheTTL = 5; // 5 minutes
-
-            // Check if cached
-            if (Cache::has($cacheKey)) {
-                return response()->json(Cache::get($cacheKey), 200);
-            }
-
-            // Convert to Unix timestamp
-            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
-            $endDateUnix = Carbon::parse($endDate)->endOfDay()->timestamp;
+            // Convert to Unix timestamp; add 59s to end time to include the full last minute
+            $startDateUnix = $startDateObj->timestamp;
+            $endDateUnix   = (clone $endDateObj)->addSeconds(59)->timestamp;
 
             // Verify device belongs to user
             $device = DeviceModel::where('device_id', $deviceId)
@@ -1251,17 +1244,89 @@ class UserController extends Controller
 
             // Build parameter info and list
             $parameterInfo = [];
-            $parameters = [];
+            $parameters    = [];
             foreach ($sensors as $sensor) {
-                $parameters[] = $sensor->parameter_name;
+                $parameters[]    = $sensor->parameter_name;
                 $parameterInfo[] = [
-                    'parameter_name' => $sensor->parameter_name,
+                    'parameter_name'  => $sensor->parameter_name,
                     'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
-                    'parameter_unit' => $sensor->sensor_unit ?? ''
+                    'parameter_unit'  => $sensor->sensor_unit ?? ''
                 ];
             }
 
-            // Get data with limit (max 2000 records) - memory efficient
+            // Cache keys (v2 prefix avoids collision with old single-page cache)
+            $baseCacheKey  = "device:{$deviceId}:table-report-v2:{$startDate}:{$endDate}";
+            $countCacheKey = "{$baseCacheKey}:count";
+            $pageCacheKey  = "{$baseCacheKey}:page:{$page}";
+            $cacheTTL      = 5; // minutes
+
+            // Return cached page if available
+            if (Cache::has($pageCacheKey)) {
+                return response()->json(Cache::get($pageCacheKey), 200);
+            }
+
+            // Get or cache total count of distinct timestamp_minutes
+            if (Cache::has($countCacheKey)) {
+                $totalRecords = Cache::get($countCacheKey);
+            } else {
+                $totalRecords = (int) DB::table('tbl_data')
+                    ->selectRaw("COUNT(DISTINCT DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i')) as total")
+                    ->where('device_id', $deviceId)
+                    ->whereIn('parameter_name', $parameters)
+                    ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                    ->value('total');
+                Cache::put($countCacheKey, $totalRecords, now()->addMinutes($cacheTTL));
+            }
+
+            if ($totalRecords === 0) {
+                return response()->json([
+                    'success'        => true,
+                    'message'        => 'No data found for the selected date range',
+                    'device_id'      => $deviceId,
+                    'device_category'=> $device->device_category,
+                    'parameters'     => $parameterInfo,
+                    'data'           => [],
+                    'total_records'  => 0,
+                    'current_page'   => 1,
+                    'per_page'       => $perPage,
+                    'total_pages'    => 0,
+                    'date_range'     => ['start' => $startDate, 'end' => $endDate]
+                ], 200);
+            }
+
+            $totalPages = (int) ceil($totalRecords / $perPage);
+            $page       = min($page, $totalPages); // clamp to valid range
+
+            // Step 1: Get the distinct timestamp_minutes for the requested page
+            $pageTimestamps = DB::table('tbl_data')
+                ->selectRaw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as ts_minute")
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('ts_minute')
+                ->orderBy('ts_minute', 'asc')
+                ->offset(($page - 1) * $perPage)
+                ->limit($perPage)
+                ->pluck('ts_minute')
+                ->toArray();
+
+            if (empty($pageTimestamps)) {
+                return response()->json([
+                    'success'        => true,
+                    'message'        => 'No data found for this page',
+                    'device_id'      => $deviceId,
+                    'device_category'=> $device->device_category,
+                    'parameters'     => $parameterInfo,
+                    'data'           => [],
+                    'total_records'  => $totalRecords,
+                    'current_page'   => $page,
+                    'per_page'       => $perPage,
+                    'total_pages'    => $totalPages,
+                    'date_range'     => ['start' => $startDate, 'end' => $endDate]
+                ], 200);
+            }
+
+            // Step 2: Fetch all sensor values for the page's timestamps
             $data = DataModel::select(
                 DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
                 'parameter_name',
@@ -1270,96 +1335,75 @@ class UserController extends Controller
             )
                 ->where('device_id', $deviceId)
                 ->whereIn('parameter_name', $parameters)
-                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->whereIn(
+                    DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i')"),
+                    $pageTimestamps
+                )
                 ->orderBy('timestamp', 'asc')
-                //->limit(2000) // Max 2000 data points to prevent memory issues
                 ->get();
 
-            if ($data->isEmpty()) {
-                $response = [
-                    'success' => true,
-                    'message' => 'No data found for the selected date range',
-                    'device_id' => $deviceId,
-                    'device_category' => $device->device_category,
-                    'parameters' => $parameterInfo,
-                    'data' => [],
-                    'total_records' => 0,
-                    'date_range' => [
-                        'start' => $startDate,
-                        'end' => $endDate
-                    ]
-                ];
-                Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
-                return response()->json($response, 200);
-            }
-
-            // Group data by timestamp_minute (memory efficient)
+            // Group data by timestamp_minute
             $groupedData = [];
             foreach ($data as $item) {
-                $timestamp = $item->timestamp_minute;
-                if (!isset($groupedData[$timestamp])) {
-                    $groupedData[$timestamp] = [
-                        'recorded_at' => $item->timestamp,
-                        'values' => []
-                    ];
+                $ts = $item->timestamp_minute;
+                if (!isset($groupedData[$ts])) {
+                    $groupedData[$ts] = ['recorded_at' => $item->timestamp, 'values' => []];
                 }
-                $groupedData[$timestamp]['values'][$item->parameter_name] = round(floatval($item->value), 2);
+                $groupedData[$ts]['values'][$item->parameter_name] = round(floatval($item->value), 2);
             }
 
-            // Format data into table
+            // Format into table rows; row numbers continue across pages
             $tableData = [];
-            $no = 1;
-            foreach ($groupedData as $timestamp => $group) {
+            $no        = (($page - 1) * $perPage) + 1;
+            foreach ($groupedData as $group) {
                 $dateTime = Carbon::createFromTimestamp($group['recorded_at'], 'UTC')
                     ->setTimezone(config('app.timezone'));
                 $row = [
-                    'no' => $no++,
-                    'date' => $dateTime->format('Y-m-d'),
-                    'time' => $dateTime->format('H:i'),
+                    'no'          => $no++,
+                    'date'        => $dateTime->format('Y-m-d'),
+                    'time'        => $dateTime->format('H:i'),
                     'recorded_at' => $dateTime->format('Y-m-d H:i:s')
                 ];
-
                 foreach ($parameters as $parameter) {
                     $row[$parameter] = $group['values'][$parameter] ?? null;
                 }
-
                 $tableData[] = $row;
             }
 
             $response = [
-                'success' => true,
-                'device_id' => $deviceId,
-                'device_category' => $device->device_category,
-                'parameters' => $parameterInfo,
-                'data' => $tableData,
-                'total_records' => count($tableData),
-                'date_range' => [
-                    'start' => $startDate,
-                    'end' => $endDate
-                ]
+                'success'        => true,
+                'device_id'      => $deviceId,
+                'device_category'=> $device->device_category,
+                'parameters'     => $parameterInfo,
+                'data'           => $tableData,
+                'total_records'  => $totalRecords,
+                'current_page'   => $page,
+                'per_page'       => $perPage,
+                'total_pages'    => $totalPages,
+                'date_range'     => ['start' => $startDate, 'end' => $endDate]
             ];
 
-            // Store in cache
-            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            Cache::put($pageCacheKey, $response, now()->addMinutes($cacheTTL));
 
             return response()->json($response, 200);
+
         } catch (\Illuminate\Validation\ValidationException $e) {
             \Log::error('Report validation error', ['errors' => $e->errors()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $e->errors()
+                'errors'  => $e->errors()
             ], 422);
         } catch (\Exception $e) {
             \Log::error('Report fetch error', [
                 'device_id' => $request->input('device_id'),
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error'     => $e->getMessage(),
+                'trace'     => $e->getTraceAsString()
             ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch report data',
-                'debug' => config('app.debug') ? $e->getMessage() : null
+                'debug'   => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
     }
