@@ -849,10 +849,22 @@
 
             list.innerHTML = '';
 
+            // First page button
+            const firstLi = document.createElement('li');
+            firstLi.className = `page-item ${curPage <= 1 ? 'disabled' : ''}`;
+            firstLi.innerHTML = `<a class="page-link" href="#" title="First page">««</a>`;
+            if (curPage > 1) {
+                firstLi.querySelector('a').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    loadQuickReportData(1);
+                });
+            }
+            list.appendChild(firstLi);
+
             // Previous button
             const prevLi = document.createElement('li');
             prevLi.className = `page-item ${curPage <= 1 ? 'disabled' : ''}`;
-            prevLi.innerHTML = `<a class="page-link" href="#">«</a>`;
+            prevLi.innerHTML = `<a class="page-link" href="#" title="Previous page">«</a>`;
             if (curPage > 1) {
                 prevLi.querySelector('a').addEventListener('click', function(e) {
                     e.preventDefault();
@@ -882,7 +894,7 @@
             // Next button
             const nextLi = document.createElement('li');
             nextLi.className = `page-item ${curPage >= totPages ? 'disabled' : ''}`;
-            nextLi.innerHTML = `<a class="page-link" href="#">»</a>`;
+            nextLi.innerHTML = `<a class="page-link" href="#" title="Next page">»</a>`;
             if (curPage < totPages) {
                 nextLi.querySelector('a').addEventListener('click', function(e) {
                     e.preventDefault();
@@ -890,6 +902,18 @@
                 });
             }
             list.appendChild(nextLi);
+
+            // Last page button
+            const lastLi = document.createElement('li');
+            lastLi.className = `page-item ${curPage >= totPages ? 'disabled' : ''}`;
+            lastLi.innerHTML = `<a class="page-link" href="#" title="Last page">»»</a>`;
+            if (curPage < totPages) {
+                lastLi.querySelector('a').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    loadQuickReportData(totPages);
+                });
+            }
+            list.appendChild(lastLi);
         }
 
         function displayQuickReportTable(reportData) {
