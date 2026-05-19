@@ -874,13 +874,13 @@ class UserController extends Controller
     {
         try {
             $userId = Auth::user()->id;
-            $cacheKey = "user:{$userId}:device-reports";
-            $cacheTTL = 2; // Cache 2 menit (data dapat berubah)
+            // $cacheKey = "user:{$userId}:device-reports";
+            // $cacheTTL = 2; // Cache 2 menit (data dapat berubah)
 
-            // Check if cached
-            if (Cache::has($cacheKey)) {
-                return response()->json(Cache::get($cacheKey), 200);
-            }
+            // // Check if cached
+            // if (Cache::has($cacheKey)) {
+            //     return response()->json(Cache::get($cacheKey), 200);
+            // }
 
             // Get all devices assigned to current user
             $userDevices = AccessModel::where('user_id', $userId)
@@ -895,7 +895,7 @@ class UserController extends Controller
                     'available_devices' => [],
                     'report' => [],
                 ];
-                Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+                // Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
                 return response()->json($response, 200);
             }
 
@@ -933,7 +933,7 @@ class UserController extends Controller
                 'report' => $reports,
             ];
 
-            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            // Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
             return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
@@ -946,13 +946,13 @@ class UserController extends Controller
     public function getDeviceReportById($id)
     {
         try {
-            $cacheKey = "report:{$id}";
-            $cacheTTL = 5; // Cache 5 menit
+            // $cacheKey = "report:{$id}";
+            // $cacheTTL = 5; // Cache 5 menit
 
-            // Check if cached
-            if (Cache::has($cacheKey)) {
-                return response()->json(Cache::get($cacheKey), 200);
-            }
+            // // Check if cached
+            // if (Cache::has($cacheKey)) {
+            //     return response()->json(Cache::get($cacheKey), 200);
+            // }
 
             $report = AutoReportModel::find($id);
 
@@ -990,7 +990,7 @@ class UserController extends Controller
                 ]
             ];
 
-            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            // Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
             return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
