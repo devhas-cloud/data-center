@@ -160,6 +160,7 @@ Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
     Route::get('/user/export-report-pdf', [UserController::class, 'exportReportPdf'])->name('user.export_report_pdf');
     Route::get('/user/export-report-excel', [UserController::class, 'exportReportExcel'])->name('user.export_report_excel');
     Route::get('/user/export-report-count', [UserController::class, 'getExportRecordCount'])->name('user.export_report_count');
+    Route::get('/user/report-summary-data', [UserController::class, 'getReportSummary'])->name('user.report_summary_data');
 
 
     // User Settings

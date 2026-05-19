@@ -1698,6 +1698,174 @@ class UserController extends Controller
         }
     }
 
+    /**
+     * Return per-parameter statistical summary (avg / max / min with timestamps)
+     * plus hourly averages (0-23) for chart rendering.
+     */
+    public function getReportSummary(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'device_id'  => 'required|string|exists:tbl_device,device_id',
+                'start_date' => 'required|date',
+                'end_date'   => 'required|date|after_or_equal:start_date',
+            ]);
+
+            $deviceId  = $validated['device_id'];
+            $startDate = $validated['start_date'];
+            $endDate   = $validated['end_date'];
+
+            // Verify access
+            $device = DeviceModel::where('device_id', $deviceId)
+                ->whereIn('id', function ($q) {
+                    $q->select('device_id')->from('tbl_access')->where('user_id', Auth::id());
+                })
+                ->select('device_id', 'device_category')
+                ->first();
+
+            if (!$device) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+
+            // Active sensors ordered by sensor position
+            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+                ->where('tbl_sensor.status', 'active')
+                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+                ->select('tbl_sensor.parameter_name', 'tbl_parameter.parameter_label', 'tbl_sensor.sensor_unit')
+                ->orderBy('tbl_sensor.id', 'asc')
+                ->get();
+
+            if ($sensors->isEmpty()) {
+                return response()->json(['success' => false, 'message' => 'No active sensors found'], 404);
+            }
+
+            $parameters    = $sensors->pluck('parameter_name')->toArray();
+            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+            $endDateUnix   = Carbon::parse($endDate)->endOfDay()->timestamp;
+            $tz            = config('app.timezone', 'UTC');
+
+            // ── Aggregates (avg / max / min) in one query ────────────────
+            $aggregates = DataModel::select(
+                'parameter_name',
+                DB::raw('ROUND(AVG(value), 2) as avg_value'),
+                DB::raw('ROUND(MAX(value), 2) as max_value'),
+                DB::raw('ROUND(MIN(value), 2) as min_value')
+            )
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('parameter_name')
+                ->get()
+                ->keyBy('parameter_name');
+
+            // ── Build stats array with max/min timestamps ─────────────────
+            $stats = [];
+            foreach ($sensors as $sensor) {
+                $paramName = $sensor->parameter_name;
+                $agg       = $aggregates[$paramName] ?? null;
+                $maxDt     = $minDt = null;
+
+                if ($agg) {
+                    $maxTs = DataModel::where('device_id', $deviceId)
+                        ->where('parameter_name', $paramName)
+                        ->where('value', $agg->max_value)
+                        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                        ->orderBy('timestamp')
+                        ->value('timestamp');
+
+                    $minTs = DataModel::where('device_id', $deviceId)
+                        ->where('parameter_name', $paramName)
+                        ->where('value', $agg->min_value)
+                        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                        ->orderBy('timestamp')
+                        ->value('timestamp');
+
+                    $maxDt = $maxTs ? Carbon::createFromTimestamp($maxTs, 'UTC')->setTimezone($tz) : null;
+                    $minDt = $minTs ? Carbon::createFromTimestamp($minTs, 'UTC')->setTimezone($tz) : null;
+                }
+
+                $stats[] = [
+                    'parameter_name'  => $paramName,
+                    'parameter_label' => $sensor->parameter_label ?? $paramName,
+                    'parameter_unit'  => $sensor->sensor_unit ?? '',
+                    'average'         => $agg ? $agg->avg_value : null,
+                    'max'             => $agg ? $agg->max_value : null,
+                    'max_time'        => $maxDt ? $maxDt->format('H:i') : null,
+                    'max_date'        => $maxDt ? $maxDt->format('d/m/Y') : null,
+                    'min'             => $agg ? $agg->min_value : null,
+                    'min_time'        => $minDt ? $minDt->format('H:i') : null,
+                    'min_date'        => $minDt ? $minDt->format('d/m/Y') : null,
+                ];
+            }
+
+            // ── Hourly averages per parameter for chart rendering (24-slot profile) ──
+            $hourlyRows = DataModel::select(
+                DB::raw('HOUR(FROM_UNIXTIME(`timestamp`)) as hour'),
+                'parameter_name',
+                DB::raw('ROUND(AVG(value), 2) as avg_value')
+            )
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('hour', 'parameter_name')
+                ->orderBy('hour')
+                ->get();
+
+            $hourlyCharts = [];
+            foreach ($parameters as $p) {
+                $hourlyCharts[$p] = array_fill(0, 24, null);
+            }
+            foreach ($hourlyRows as $row) {
+                if (isset($hourlyCharts[$row->parameter_name])) {
+                    $hourlyCharts[$row->parameter_name][(int) $row->hour] = floatval($row->avg_value);
+                }
+            }
+
+            // ── Flexible datetime-grouped hourly data for table display ───────────
+            // Groups by hour-bucket (floor to hour) across the full date range
+            $hourlyTableRows = DataModel::select(
+                DB::raw('(FLOOR(`timestamp` / 3600) * 3600) as hour_ts'),
+                'parameter_name',
+                DB::raw('ROUND(AVG(value), 2) as avg_value')
+            )
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('hour_ts', 'parameter_name')
+                ->orderBy('hour_ts')
+                ->get();
+
+            $hourlyTableMap = [];
+            foreach ($hourlyTableRows as $row) {
+                $hts = (int) $row->hour_ts;
+                if (!isset($hourlyTableMap[$hts])) {
+                    $hourlyTableMap[$hts] = [
+                        'datetime' => Carbon::createFromTimestamp($hts, 'UTC')
+                            ->setTimezone($tz)
+                            ->format('d/m/Y H:i'),
+                        'values' => [],
+                    ];
+                }
+                $hourlyTableMap[$hts]['values'][$row->parameter_name] = floatval($row->avg_value);
+            }
+            $hourlyTableData = array_values($hourlyTableMap);
+
+            return response()->json([
+                'success'         => true,
+                'device_id'       => $deviceId,
+                'device_category' => $device->device_category,
+                'date_range'      => ['start' => $startDate, 'end' => $endDate],
+                'stats'           => $stats,
+                'hourly_charts'   => $hourlyCharts,
+                'hourly_table'    => $hourlyTableData,
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $e->errors()], 422);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
     private function getReportData($deviceId, $startDate, $endDate)
     {
         try {

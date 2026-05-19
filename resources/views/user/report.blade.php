@@ -104,12 +104,15 @@
 
                                 <!-- Export Buttons -->
                                 <div class="col-md-3 mb-1">
-                                    <div class="d-flex gap-2">
-                                        <button type="button" class="btn btn-danger flex-fill" id="exportPdfBtn">
-                                            <i class="bi bi-file-earmark-pdf"></i> Export PDF
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <button type="button" class="btn btn-sm btn-danger flex-fill" id="exportPdfBtn">
+                                            <i class="bi bi-file-earmark-pdf"></i> PDF
                                         </button>
-                                        <button type="button" class="btn btn-success flex-fill" id="exportExcelBtn">
-                                            <i class="bi bi-file-earmark-excel"></i> Export Excel
+                                        <button type="button" class="btn btn-sm btn-warning text-dark flex-fill" id="exportSummaryPdfBtn">
+                                            <i class="bi bi-bar-chart-line"></i> Summary
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-success flex-fill" id="exportExcelBtn">
+                                            <i class="bi bi-file-earmark-excel"></i> Excel
                                         </button>
                                     </div>
                                 </div>
@@ -1409,6 +1412,490 @@
                 });
             } else {
                 doExport();
+            }
+        }
+
+        // ── Summary PDF button handler ────────────────────────────────────
+        document.getElementById('exportSummaryPdfBtn').addEventListener('click', function() {
+            if (!currentReportData) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Warning',
+                    text: 'Silakan load data report terlebih dahulu dengan klik tombol Show.'
+                });
+                return;
+            }
+            exportSummaryPDF();
+        });
+
+        // ── Helper: lazy-load a <script> tag ────────────────────────────
+        function loadLibrary(src, isLoaded) {
+            return new Promise(function(resolve, reject) {
+                if (isLoaded && isLoaded()) { resolve(); return; }
+                const existing = document.querySelector('script[src="' + src + '"]');
+                if (existing) {
+                    const wait = setInterval(function() {
+                        if (!isLoaded || isLoaded()) { clearInterval(wait); resolve(); }
+                    }, 100);
+                    setTimeout(function() { clearInterval(wait); resolve(); }, 8000);
+                    return;
+                }
+                const s   = document.createElement('script');
+                s.src     = src;
+                s.onload  = function() { setTimeout(resolve, 150); };
+                s.onerror = function() { reject(new Error('Gagal memuat: ' + src)); };
+                document.head.appendChild(s);
+            });
+        }
+
+        // ── Helper: render Chart.js charts to base64 PNG strings ────────
+        async function renderParameterCharts(summary) {
+            const container = document.createElement('div');
+            container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1100px;';
+            document.body.appendChild(container);
+
+            const images  = {};
+            const hours   = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00');
+            const palette = [
+                '#0d6efd','#dc3545','#198754','#fd7e14',
+                '#6f42c1','#20c997','#0dcaf0','#ffc107',
+                '#d63384','#6c757d','#e83e8c','#17a2b8'
+            ];
+
+            for (let ci = 0; ci < summary.stats.length; ci++) {
+                const stat      = summary.stats[ci];
+                const canvas    = document.createElement('canvas');
+                canvas.width    = 1100;
+                canvas.height   = 380;
+                container.appendChild(canvas);
+
+                const rawData    = summary.hourly_charts[stat.parameter_name] || Array(24).fill(null);
+                const validVals  = rawData.filter(v => v !== null);
+                const maxVal     = validVals.length ? Math.max(...validVals) : null;
+                const minVal     = validVals.length ? Math.min(...validVals) : null;
+                const lineColor  = palette[ci % palette.length];
+
+                const pointColors = rawData.map(v => {
+                    if (v === null)   return 'rgba(0,0,0,0)';
+                    if (v === maxVal) return '#dc3545';
+                    if (v === minVal) return '#198754';
+                    return lineColor;
+                });
+                const pointRadius = rawData.map(v => {
+                    if (v === null)                  return 0;
+                    if (v === maxVal || v === minVal) return 7;
+                    return 3;
+                });
+
+                const chart = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: hours,
+                        datasets: [{
+                            label: stat.parameter_label,
+                            data: rawData,
+                            borderColor: lineColor,
+                            backgroundColor: lineColor + '18',
+                            tension: 0.35,
+                            fill: true,
+                            pointRadius: pointRadius,
+                            pointBackgroundColor: pointColors,
+                            pointBorderColor: pointColors,
+                            spanGaps: true,
+                            borderWidth: 2.5
+                        }]
+                    },
+                    options: {
+                        animation: false,
+                        responsive: false,
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: stat.parameter_label + (stat.parameter_unit ? '  (' + stat.parameter_unit + ')' : ''),
+                                font: { size: 17, weight: 'bold' },
+                                color: '#212529',
+                                padding: { top: 10, bottom: 14 }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { maxTicksLimit: 12, font: { size: 11 } },
+                                grid: { color: 'rgba(0,0,0,0.04)' },
+                                title: { display: true, text: 'Hour', font: { size: 11 } }
+                            },
+                            y: {
+                                title: { display: true, text: stat.parameter_unit || 'Value', font: { size: 11 } },
+                                beginAtZero: false,
+                                ticks: { font: { size: 11 } },
+                                grid: { color: 'rgba(0,0,0,0.04)' }
+                            }
+                        }
+                    }
+                });
+
+                await new Promise(r => setTimeout(r, 100));
+                images[stat.parameter_name] = canvas.toDataURL('image/png', 1.0);
+                chart.destroy();
+                container.removeChild(canvas);
+            }
+
+            document.body.removeChild(container);
+            return images;
+        }
+
+        // ── Main Summary PDF generator ───────────────────────────────────
+        async function exportSummaryPDF() {
+            const deviceId  = document.getElementById('quickDeviceId').value;
+            const startDate = document.getElementById('quickStartDate').value;
+            const endDate   = document.getElementById('quickEndDate').value;
+
+            Swal.fire({
+                title: 'Membuat Summary PDF…',
+                html: '<div>Mengambil data statistik dan merender grafik…<br>' +
+                      '<small class="text-muted">Proses ini memerlukan beberapa detik.</small></div>',
+                allowOutsideClick: false,
+                allowEscapeKey: false,
+                didOpen: () => Swal.showLoading()
+            });
+
+            try {
+                // 1. Fetch summary data
+                const params = new URLSearchParams({
+                    device_id: deviceId, start_date: startDate, end_date: endDate
+                });
+                const resp = await fetch('/user/report-summary-data?' + params.toString(), {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.message || 'Server error ' + resp.status);
+                }
+                const summary = await resp.json();
+                if (!summary.success) throw new Error(summary.message || 'Gagal memuat data summary');
+
+                // 2. Load PDF + chart libraries
+                await loadLibrary(
+                    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+                    () => !!window.jspdf
+                );
+                await loadLibrary(
+                    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js',
+                    () => !!(window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.prototype.autoTable)
+                );
+                await loadLibrary(
+                    'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+                    () => typeof Chart !== 'undefined'
+                );
+
+                // 3. Fetch logo as base64 (same-origin, optional)
+                let logoDataUrl = null;
+                try {
+                    const lr = await fetch('/assets/img/HasSolution.png');
+                    if (lr.ok) {
+                        const lb = await lr.blob();
+                        logoDataUrl = await new Promise(res => {
+                            const fr = new FileReader();
+                            fr.onload = () => res(fr.result);
+                            fr.readAsDataURL(lb);
+                        });
+                    }
+                } catch (_) { /* logo is optional */ }
+
+                // 4. Render charts
+                const chartImages = await renderParameterCharts(summary);
+
+                // 5. Build PDF ─────────────────────────────────────────────
+                const { jsPDF } = window.jspdf;
+                const doc   = new jsPDF('l', 'mm', 'a4');
+                const pageW = doc.internal.pageSize.getWidth();   // 297 mm
+                const pageH = doc.internal.pageSize.getHeight();  // 210 mm
+
+                // ── Header helper ────────────────────────────────────────
+                const addHeader = (subtitle) => {
+                    if (logoDataUrl) {
+                        try { doc.addImage(logoDataUrl, 'PNG', 14, 1, 30, 24); } catch (_) {}
+                    }
+                    let y = 10;
+                    doc.setFontSize(15); doc.setFont(undefined, 'bold'); doc.setTextColor(33, 37, 41);
+                    doc.text('SUMMARY REPORT', 48, y); y += 5;
+                    if (subtitle) {
+                        doc.setFontSize(9); doc.setFont(undefined, 'italic'); doc.setTextColor(73, 80, 87);
+                        doc.text(subtitle, 48, y); y += 4;
+                    } else { y += 1; }
+                    doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(73, 80, 87);
+                    doc.text('Device: ' + summary.device_id + '  |  Category: ' + summary.device_category, 48, y); y += 4;
+                    doc.text('Period: ' + summary.date_range.start + '  to  ' + summary.date_range.end, 48, y); y += 4;
+                    const gen = 'Generated: {{ Date::now()->format("Y-m-d H:i:s") }}';
+                    doc.setTextColor(108, 117, 125);
+                    doc.text(gen, pageW - 14 - doc.getTextWidth(gen), y); y += 2;
+                    doc.setDrawColor(52, 58, 64); doc.setLineWidth(0.8);
+                    doc.line(14, y, pageW - 14, y);
+                };
+
+                // ── Footer helper ────────────────────────────────────────
+                const addFooter = (pageNum, totalPages) => {
+                    const fy = pageH - 10;
+                    doc.setDrawColor(200, 200, 200); doc.setLineWidth(0.3);
+                    doc.line(14, pageH - 17, pageW - 14, pageH - 17);
+                    doc.setFontSize(9); doc.setFont(undefined, 'normal');
+                    doc.setTextColor(108, 117, 125);
+                    doc.text('Page ' + pageNum + ' of ' + totalPages, 14, fy);
+                    doc.setTextColor(52, 58, 64);
+                    const pt = 'Powered by Data Center System';
+                    doc.text(pt, pageW - 14 - doc.getTextWidth(pt), fy);
+                };
+
+                // ── Page 1: Statistical Summary Table ─────────────────────
+                addHeader('Statistical Overview');
+
+                const pCount  = summary.stats.length;
+                const availW  = pageW - 28;
+                const lblColW = 24;
+                const pColW   = Math.max(13, (availW - lblColW) / pCount);
+                const fs      = pCount > 10 ? 6 : pCount > 7 ? 7 : 8;
+                const fsH     = fs + 0.5;
+
+                // Column styles: col 0 = row label, cols 1..N = parameters
+                const tblColStyles = { 0: { cellWidth: lblColW, halign: 'left', fontStyle: 'bold' } };
+                summary.stats.forEach((_, i) => {
+                    tblColStyles[i + 1] = { cellWidth: pColW, halign: 'center' };
+                });
+
+                // Header row
+                const hRow = [{ content: '', styles: { fillColor: [52, 58, 64], textColor: [255,255,255] } }];
+                summary.stats.forEach(s => hRow.push({
+                    content: s.parameter_label + (s.parameter_unit ? '\n(' + s.parameter_unit + ')' : ''),
+                    styles: { halign: 'center' }
+                }));
+
+                const fmt = v => (v !== null && v !== undefined && v !== '') ? String(v) : '-';
+
+                // Helper to build one row
+                const mkRow = (lbl, vals, bg, bold) => [
+                    { content: lbl, styles: { fillColor: bg, fontStyle: bold ? 'bold' : 'normal' } },
+                    ...vals.map(v => ({ content: fmt(v), styles: { fillColor: bg } }))
+                ];
+                const mkSub = (lbl, vals, bg) => [
+                    { content: lbl, styles: { fillColor: bg, fontSize: fs - 0.5, fontStyle: 'italic' } },
+                    ...vals.map(v => ({ content: fmt(v), styles: { fillColor: bg, fontSize: fs - 0.5 } }))
+                ];
+                const mkSep = (label, textColor, bg) => [
+                    { content: label, styles: {
+                        fillColor: bg, fontStyle: 'bold', fontSize: fs - 0.5,
+                        textColor: textColor, cellPadding: { top: 1.5, bottom: 1.5, left: 2, right: 2 }
+                    }},
+                    ...summary.stats.map(() => ({ content: '', styles: { fillColor: bg } }))
+                ];
+
+                const WHITE = [255, 255, 255];
+                const RED   = [255, 238, 238];
+                const GREEN = [238, 255, 243];
+                const RSEP  = [255, 210, 210];
+                const GSEP  = [200, 240, 215];
+
+                const bodyRows = [
+                    mkRow('Average', summary.stats.map(s => s.average), WHITE, true),
+                    mkSep('▲  MAXIMUM', [180, 0, 0], WHITE),
+                    mkRow('Value', summary.stats.map(s => s.max), WHITE, false),
+                    mkSub('Time', summary.stats.map(s => s.max_time), WHITE),
+                    mkSub('Date', summary.stats.map(s => s.max_date), WHITE),
+                    mkSep('▼  MINIMUM', [0, 130, 60], WHITE),
+                    mkRow('Value', summary.stats.map(s => s.min), WHITE, false),
+                    mkSub('Time', summary.stats.map(s => s.min_time), WHITE),
+                    mkSub('Date', summary.stats.map(s => s.min_date), WHITE),
+                ];
+
+                doc.autoTable({
+                    head: [hRow],
+                    body: bodyRows,
+                    startY: 31,
+                    margin: { top: 31, bottom: 22, left: 14, right: 14 },
+                    theme: 'grid',
+                    tableWidth: 'auto',
+                    styles: {
+                        fontSize: fs,
+                        cellPadding: 2.5,
+                        overflow: 'linebreak',
+                        lineColor: [210, 210, 210],
+                        lineWidth: 0.15
+                    },
+                    headStyles: {
+                        fillColor: [52, 58, 64],
+                        textColor: [255, 255, 255],
+                        fontStyle: 'bold',
+                        fontSize: fsH,
+                        halign: 'center',
+                        valign: 'middle',
+                        cellPadding: 3
+                    },
+                    columnStyles: tblColStyles,
+                    didDrawPage: data => {
+                        addHeader('Statistical Overview');
+                        addFooter(data.pageNumber, '??');
+                    }
+                });
+
+                // ── Page 2: Flexible Hourly Average Table ─────────────────────
+                // Rows span the full selected date range (one row per hour slot)
+                if (summary.hourly_table && summary.hourly_table.length > 0) {
+                    doc.addPage();
+                    const htTitle = 'Hourly Average  (' + summary.date_range.start + '  to  ' + summary.date_range.end + ')';
+                    addHeader(htTitle);
+
+                    // Per-parameter value ranges for colour coding (from actual table data)
+                    const paramRanges = {};
+                    summary.stats.forEach(s => {
+                        const vals = summary.hourly_table
+                            .map(r => r.values[s.parameter_name])
+                            .filter(v => v !== null && v !== undefined);
+                        paramRanges[s.parameter_name] = {
+                            min: vals.length ? Math.min(...vals) : 0,
+                            max: vals.length ? Math.max(...vals) : 0
+                        };
+                    });
+
+                    // Map a value to a fill colour (green → blue → yellow → red)
+                    const hourlyColor = (paramName, value) => {
+                        // if (value === null || value === undefined) return [248, 248, 248];
+                        // const { min, max } = paramRanges[paramName];
+                        // const range = max - min;
+                        // if (range === 0) return [255, 255, 255];
+                        // const ratio = (value - min) / range;
+                        // if (ratio <= 0.25) return [198, 239, 206];  // green  – low
+                        // if (ratio <= 0.60) return [189, 215, 238];  // blue   – moderate
+                        // if (ratio <= 0.85) return [255, 235, 156];  // yellow – high
+                        // return [255, 199, 206];                      // red    – very high
+                        return [255, 255, 255];
+                    };
+
+                    // Header row
+                    const hourHeadRow = [
+                        { content: 'Date / Hour', styles: { halign: 'center', fontStyle: 'bold' } }
+                    ];
+                    summary.stats.forEach(s => hourHeadRow.push({
+                        content: s.parameter_label + (s.parameter_unit ? '\n(' + s.parameter_unit + ')' : ''),
+                        styles: { halign: 'center' }
+                    }));
+
+                    // Body: one row per actual datetime slot in the date range
+                    const hourBodyRows = [];
+                    summary.hourly_table.forEach(slot => {
+                        const row = [{
+                            content: slot.datetime,
+                            styles: { halign: 'center', fontStyle: 'bold', fillColor: [245, 245, 245] }
+                        }];
+                        summary.stats.forEach(s => {
+                            const v  = slot.values[s.parameter_name];
+                            const bg = hourlyColor(s.parameter_name, v !== undefined ? v : null);
+                            row.push({ content: fmt(v !== undefined ? v : null), styles: { halign: 'center', fillColor: bg } });
+                        });
+                        hourBodyRows.push(row);
+                    });
+
+                    // Column widths (reuse pCount / availW defined above)
+                    const hLblColW = 26;
+                    const hPColW   = Math.max(13, (availW - hLblColW) / pCount);
+                    const hfs      = pCount > 10 ? 6 : pCount > 7 ? 7 : 8;
+                    const hourColStyles = { 0: { cellWidth: hLblColW, halign: 'center', fontStyle: 'bold' } };
+                    summary.stats.forEach((_, i) => {
+                        hourColStyles[i + 1] = { cellWidth: hPColW, halign: 'center' };
+                    });
+
+                    doc.autoTable({
+                        head: [hourHeadRow],
+                        body: hourBodyRows,
+                        startY: 31,
+                        margin: { top: 31, bottom: 22, left: 14, right: 14 },
+                        theme: 'grid',
+                        tableWidth: 'auto',
+                        styles: {
+                            fontSize: hfs,
+                            cellPadding: 2,
+                            overflow: 'linebreak',
+                            lineColor: [210, 210, 210],
+                            lineWidth: 0.15
+                        },
+                        headStyles: {
+                            fillColor: [52, 58, 64],
+                            textColor: [255, 255, 255],
+                            fontStyle: 'bold',
+                            fontSize: hfs + 0.5,
+                            halign: 'center',
+                            valign: 'middle',
+                            cellPadding: 3
+                        },
+                        columnStyles: hourColStyles,
+                        didDrawPage: data => {
+                            addHeader(htTitle);
+                            addFooter(data.pageNumber, '??');
+                        }
+                    });
+                }
+
+                // ── Pages 3+: Line Charts (2 per page, side by side) ─────────
+                // Each chart canvas was 1100×380; aspect ratio ≈ 2.895
+                const chartW  = (pageW - 28 - 6) / 2;     // two columns, 6 mm gap
+                const chartH  = chartW * (380 / 1100);     // keep aspect ratio
+
+                for (let i = 0; i < summary.stats.length; i += 2) {
+                    doc.addPage();
+                    addHeader('Graphic Overview');
+
+                    const startY = 33;
+
+                    [0, 1].forEach(col => {
+                        const stat = summary.stats[i + col];
+                        if (!stat) return;
+
+                        const xPos = 14 + col * (chartW + 6);
+                        const img  = chartImages[stat.parameter_name];
+                        if (img) {
+                            doc.addImage(img, 'PNG', xPos, startY, chartW, chartH);
+                        }
+
+                        // Stats annotation below chart
+                        doc.setFontSize(6.5);
+                        doc.setFont(undefined, 'normal');
+                        doc.setTextColor(80, 80, 80);
+                        const annotation =
+                            'Max: ' + fmt(stat.max) + '  (' + fmt(stat.max_time) + ' ' + fmt(stat.max_date) + ')' +
+                            '   Min: ' + fmt(stat.min) + '  (' + fmt(stat.min_time) + ' ' + fmt(stat.min_date) + ')' +
+                            '   Avg: ' + fmt(stat.average) + (stat.parameter_unit ? ' ' + stat.parameter_unit : '');
+                        doc.text(annotation, xPos, startY + chartH + 5, { maxWidth: chartW });
+                    });
+
+                    addFooter(doc.internal.getNumberOfPages(), '??');
+                }
+
+                // ── Fix page numbers across all pages ─────────────────────
+                const totalPages = doc.internal.getNumberOfPages();
+                for (let p = 1; p <= totalPages; p++) {
+                    doc.setPage(p);
+                    const fy = pageH - 10;
+                    doc.setFillColor(255, 255, 255);
+                    doc.rect(0, fy - 7, pageW, 17, 'F');
+                    addFooter(p, totalPages);
+                }
+
+                // ── Save ─────────────────────────────────────────────────
+                doc.save('SummaryReport_' + deviceId + '_' + startDate + '_to_' + endDate + '.pdf');
+
+                Swal.close();
+                Swal.fire({
+                    icon: 'success', title: 'Berhasil',
+                    text: 'Summary PDF berhasil diunduh!',
+                    timer: 2500, showConfirmButton: false
+                });
+
+            } catch (error) {
+                console.error('Summary PDF error:', error);
+                Swal.close();
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Export Gagal',
+                    text: error.message || 'Gagal membuat Summary PDF. Silakan coba lagi.'
+                });
             }
         }
 
