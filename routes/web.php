@@ -16,7 +16,7 @@ use App\Http\Controllers\UserController;
 use App\Http\Controllers\AdminUserController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', [AuthController::class, 'checkLogin']);;  
+Route::get('/', [AuthController::class, 'checkLogin']);;
 
 Route::get('/login', function () {
     return redirect('/');
@@ -37,7 +37,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/admin/home', [AdminHomeController::class, 'manageHome'])->name('admin.home');
     Route::get('/admin/devices-data', [AdminHomeController::class, 'getAdminDevicesData'])->name('admin.devices_data');
     Route::get('/admin/device-latest-data/{deviceId}', [AdminHomeController::class, 'getLatestData'])->name('admin.device_latest_data');
-    
+
     // Dashboard management
     Route::get('/admin/dashboard', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
     Route::get('/admin/maps-dashboard/{deviceId}', [AdminDashboardController::class, 'getMapsDashboard'])->name('admin.maps_dashboard');
@@ -48,7 +48,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/admin/historical-data', [AdminDashboardController::class, 'getHistoricalData'])->name('admin.historical_data');
     Route::get('/admin/historical-data/export', [AdminDashboardController::class, 'exportHistoricalData'])->name('admin.historical_data.export');
     Route::get('/admin/historical-chart-data/{deviceId}', [AdminDashboardController::class, 'getHistoricalChartData'])->name('admin.historical_chart_data');
-    
+
 
     // User management
     Route::get('/admin/manage-users', [AdminUserController::class, 'manageUsers'])->name('admin.manage_users');
@@ -129,7 +129,7 @@ Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
     // User Home
     Route::get('/user/home', [UserController::class, 'home'])->name('user.home');
     Route::get('/user/devices-data', [UserController::class, 'getDeviceForHome'])->name('user.devices_data');
-    
+
     // User Dashboard
     Route::get('/user/dashboard', [UserController::class, 'dashboard'])->name('user.dashboard');
     Route::get('/user/maps-dashboard/{deviceId}', [UserController::class, 'getMapsDashboard'])->name('user.maps_dashboard');
@@ -140,7 +140,7 @@ Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
     Route::get('/user/historical-data', [UserController::class, 'getHistoricalData'])->name('user.historical_data');
     Route::get('/user/historical-data/export', [UserController::class, 'exportHistoricalData'])->name('user.historical_data.export');
     Route::get('/user/historical-chart-data/{deviceId}', [UserController::class, 'getHistoricalChartData'])->name('user.historical_chart_data');
-    
+
     Route::get('/user/device-info', [UserController::class, 'deviceInfo'])->name('user.device_info');
     Route::get('/user/device-info/{deviceId}', [UserController::class, 'getDeviceInfo'])->name('user.getDeviceInfo');
     Route::get('/user/syslog-detail/{id}', [UserController::class, 'getSyslogDetail'])->name('user.getSyslogDetail');
@@ -159,6 +159,7 @@ Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
     // Export routes
     Route::get('/user/export-report-pdf', [UserController::class, 'exportReportPdf'])->name('user.export_report_pdf');
     Route::get('/user/export-report-excel', [UserController::class, 'exportReportExcel'])->name('user.export_report_excel');
+    Route::get('/user/export-report-count', [UserController::class, 'getExportRecordCount'])->name('user.export_report_count');
 
 
     // User Settings

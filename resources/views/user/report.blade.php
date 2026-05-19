@@ -1182,6 +1182,30 @@
                         return rowData;
                     });
 
+                    // Build dynamic column widths based on parameter count
+                    const availableWidth = pageWidth - 28; // 14mm left + 14mm right margin
+                    const noColWidth   = 10;
+                    const dateColWidth = 22;
+                    const timeColWidth = 18;
+                    const fixedWidth   = noColWidth + dateColWidth + timeColWidth;
+                    const paramCount   = currentReportData.parameters.length;
+                    const paramColWidth = paramCount > 0
+                        ? Math.max(12, (availableWidth - fixedWidth) / paramCount)
+                        : 20;
+                    const totalCols = 3 + paramCount;
+                    const dynamicFontSize = totalCols > 12 ? 6 : totalCols > 8 ? 7 : 8;
+                    const dynamicHeadFontSize = totalCols > 12 ? 6.5 : totalCols > 8 ? 7.5 : 9;
+                    const dynamicCellPadding = totalCols > 10 ? 2 : 3;
+
+                    const colStyles = {
+                        0: { cellWidth: noColWidth,   halign: 'center' },
+                        1: { cellWidth: dateColWidth, halign: 'center' },
+                        2: { cellWidth: timeColWidth, halign: 'center' }
+                    };
+                    for (let i = 0; i < paramCount; i++) {
+                        colStyles[i + 3] = { cellWidth: paramColWidth, halign: 'center' };
+                    }
+
                     // Generate table with headers and footers
                     doc.autoTable({
                         head: headers,
@@ -1189,26 +1213,25 @@
                         startY: 27,
                         margin: { top: 27, bottom: 15, left: 14, right: 14 },
                         theme: 'striped',
+                        tableWidth: 'auto',
                         styles: {
-                            fontSize: 8,
-                            cellPadding: 3,
+                            fontSize: dynamicFontSize,
+                            cellPadding: dynamicCellPadding,
                             lineColor: [220, 220, 220],
-                            lineWidth: 0.1
+                            lineWidth: 0.1,
+                            overflow: 'linebreak',
+                            halign: 'center'
                         },
                         headStyles: {
                             fillColor: [52, 58, 64],
                             textColor: [255, 255, 255],
                             fontStyle: 'bold',
-                            fontSize: 9,
+                            fontSize: dynamicHeadFontSize,
                             halign: 'center',
                             valign: 'middle',
-                            cellPadding: 4
+                            cellPadding: dynamicCellPadding + 1
                         },
-                        columnStyles: {
-                            0: { cellWidth: 12, halign: 'center' },
-                            1: { cellWidth: 25, halign: 'center' },
-                            2: { cellWidth: 20, halign: 'center' }
-                        },
+                        columnStyles: colStyles,
                         alternateRowStyles: {
                             fillColor: [248, 249, 250]
                         },
@@ -1278,41 +1301,115 @@
         });
 
         function exportToExcel() {
-            const deviceId = document.getElementById('quickDeviceId').value;
+            const deviceId  = document.getElementById('quickDeviceId').value;
             const startDate = document.getElementById('quickStartDate').value;
-            const endDate = document.getElementById('quickEndDate').value;
+            const endDate   = document.getElementById('quickEndDate').value;
 
-            // Show loading
-            Swal.fire({
-                title: 'Generating Excel...',
-                text: 'Please wait',
-                allowOutsideClick: false,
-                didOpen: () => {
-                    Swal.showLoading();
+            // Use the record count we already know from the loaded report
+            const totalRecords = currentReportData?.total_records ?? 0;
+
+            // Estimate server processing time: ~2 000 rows/second for Excel generation
+            const estimatedSec  = Math.max(5, Math.ceil(totalRecords / 2000));
+            const estimatedMin  = Math.ceil(estimatedSec / 60);
+            const timeLabel     = estimatedSec < 60
+                ? `±${estimatedSec} detik`
+                : `±${estimatedMin} menit`;
+
+            // Helper: build the download message shown inside SweetAlert while waiting
+            const buildLoadingHtml = () => {
+                if (totalRecords > 1000) {
+                    return `<div class="text-center">
+                        <div>Memproses <b>${totalRecords.toLocaleString()}</b> baris data…</div>
+                        <div class="text-muted mt-1"><small>Estimasi waktu: <b>${timeLabel}</b>.<br>
+                        Jangan tutup tab browser hingga selesai.</small></div>
+                    </div>`;
                 }
-            });
+                return 'Mohon tunggu, sedang membuat file Excel…';
+            };
 
-            // Create form data to send to server
-            const params = new URLSearchParams({
-                device_id: deviceId,
-                start_date: startDate,
-                end_date: endDate
-            });
-
-            // Send request to server
-            window.location.href = `/user/export-report-excel?${params.toString()}`;
-
-            // Close loading after a short delay
-            setTimeout(() => {
-                Swal.close();
+            // Core download function (uses fetch + Blob so loading dialog stays visible)
+            const doExport = () => {
                 Swal.fire({
-                    icon: 'success',
-                    title: 'Success',
-                    text: 'Excel export started!',
-                    timer: 2000,
-                    showConfirmButton: false
+                    title: 'Membuat Excel…',
+                    html: buildLoadingHtml(),
+                    allowOutsideClick: false,
+                    allowEscapeKey: false,
+                    didOpen: () => { Swal.showLoading(); }
                 });
-            }, 1000);
+
+                const params = new URLSearchParams({
+                    device_id:  deviceId,
+                    start_date: startDate,
+                    end_date:   endDate
+                });
+
+                fetch(`/user/export-report-excel?${params.toString()}`, {
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        // Try to parse server error message
+                        return response.json().then(err => {
+                            throw new Error(err.message || `Server error ${response.status}`);
+                        }).catch(() => {
+                            throw new Error(`Server error ${response.status}`);
+                        });
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    // Trigger browser download from the Blob
+                    const url = window.URL.createObjectURL(blob);
+                    const a   = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href          = url;
+                    a.download      = `Report_${deviceId}_${startDate}_to_${endDate}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+
+                    Swal.close();
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Berhasil',
+                        text: `Excel (${totalRecords.toLocaleString()} baris) berhasil diunduh!`,
+                        timer: 2500,
+                        showConfirmButton: false
+                    });
+                })
+                .catch(error => {
+                    console.error('Excel export error:', error);
+                    Swal.close();
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Export Gagal',
+                        text: error.message || 'Gagal membuat Excel. Silakan coba lagi.'
+                    });
+                });
+            };
+
+            // Show confirmation dialog for large datasets (> 5 000 rows)
+            if (totalRecords > 5000) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Dataset Besar',
+                    html: `<div>Anda akan mengekspor <b>${totalRecords.toLocaleString()}</b> baris data.<br>
+                           Estimasi waktu pemrosesan: <b>${timeLabel}</b>.<br>
+                           <small class="text-muted">Pastikan koneksi internet stabil dan jangan tutup browser.</small></div>`,
+                    showCancelButton: true,
+                    confirmButtonText: 'Ya, Export Sekarang',
+                    cancelButtonText: 'Batal',
+                    confirmButtonColor: '#28a745'
+                }).then(result => {
+                    if (result.isConfirmed) doExport();
+                });
+            } else {
+                doExport();
+            }
         }
 
 

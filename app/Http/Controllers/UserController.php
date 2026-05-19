@@ -1408,22 +1408,71 @@ class UserController extends Controller
         }
     }
 
-    public function exportReportExcel(Request $request)
+    /**
+     * Return the expected row count for an export (fast COUNT query).
+     * Used by the frontend to show warnings before downloading large files.
+     */
+    public function getExportRecordCount(Request $request)
     {
         try {
-
-            // Validate request
             $validated = $request->validate([
-                'device_id' => 'required|string|exists:tbl_device,device_id',
+                'device_id'  => 'required|string|exists:tbl_device,device_id',
                 'start_date' => 'required|date',
-                'end_date' => 'required|date|after_or_equal:start_date',
+                'end_date'   => 'required|date|after_or_equal:start_date',
             ]);
 
-            $deviceId = $validated['device_id'];
+            $deviceId  = $validated['device_id'];
             $startDate = $validated['start_date'];
-            $endDate = $validated['end_date'];
+            $endDate   = $validated['end_date'];
 
-            // Verify device belongs to user - optimized query
+            // Verify access
+            $hasAccess = DeviceModel::where('device_id', $deviceId)
+                ->whereIn('id', function ($q) {
+                    $q->select('device_id')->from('tbl_access')->where('user_id', Auth::id());
+                })->exists();
+
+            if (!$hasAccess) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+
+            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+            $endDateUnix   = Carbon::parse($endDate)->endOfDay()->timestamp;
+
+            // Count distinct minute-grouped timestamps = expected export rows
+            $count = DataModel::where('device_id', $deviceId)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->distinct()
+                ->count(DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i')"));
+
+            return response()->json(['success' => true, 'count' => (int) $count]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Generate and stream an Excel report.
+     * Uses cursor()-based query to stay memory-efficient for large datasets,
+     * writes to a temp file, then streams the file via response()->download().
+     */
+    public function exportReportExcel(Request $request)
+    {
+        // Raise limits – large exports can take time and memory
+        ini_set('memory_limit', '512M');
+        set_time_limit(600);
+
+        try {
+            $validated = $request->validate([
+                'device_id'  => 'required|string|exists:tbl_device,device_id',
+                'start_date' => 'required|date',
+                'end_date'   => 'required|date|after_or_equal:start_date',
+            ]);
+
+            $deviceId  = $validated['device_id'];
+            $startDate = $validated['start_date'];
+            $endDate   = $validated['end_date'];
+
+            // Verify device belongs to authenticated user
             $device = DeviceModel::where('device_id', $deviceId)
                 ->whereIn('id', function ($query) {
                     $query->select('device_id')
@@ -1434,197 +1483,218 @@ class UserController extends Controller
                 ->first();
 
             if (!$device) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Device not found or unauthorized'
-                ], 403);
+                return response()->json(['success' => false, 'message' => 'Device not found or unauthorized'], 403);
             }
 
+            // Active sensors for this device
+            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+                ->where('tbl_sensor.status', 'active')
+                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+                ->select('tbl_sensor.parameter_name', 'tbl_parameter.parameter_label', 'tbl_sensor.sensor_unit')
+                ->orderBy('tbl_sensor.id', 'asc')
+                ->get();
 
-            // Get report data
-            $reportData = $this->getReportData($deviceId, $startDate, $endDate);
-
-
-            if (!$reportData['success']) {
-                return response()->json($reportData, 404);
+            if ($sensors->isEmpty()) {
+                return response()->json(['success' => false, 'message' => 'No active sensors found for this device'], 404);
             }
 
-            // Create new Spreadsheet
+            $parameters    = [];
+            $parameterInfo = [];
+            foreach ($sensors as $sensor) {
+                $parameters[]    = $sensor->parameter_name;
+                $parameterInfo[] = [
+                    'parameter_name'  => $sensor->parameter_name,
+                    'parameter_label' => $sensor->parameter_label ?? $sensor->parameter_name,
+                    'parameter_unit'  => $sensor->sensor_unit ?? '',
+                ];
+            }
+
+            $startDateUnix = Carbon::parse($startDate)->startOfDay()->timestamp;
+            $endDateUnix   = Carbon::parse($endDate)->endOfDay()->timestamp;
+
+            // ── Build Spreadsheet ────────────────────────────────────────
             $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-            $sheet = $spreadsheet->getActiveSheet();
+            $sheet       = $spreadsheet->getActiveSheet();
 
-            // Set document properties
             $spreadsheet->getProperties()
                 ->setCreator('Data Center System')
                 ->setTitle("Report {$deviceId}")
-                ->setSubject("Device Report")
+                ->setSubject('Device Report')
                 ->setDescription("Report for device {$deviceId} from {$startDate} to {$endDate}");
 
-            // Calculate last column for dynamic merge cells
-            $totalColumns = 3 + count($reportData['parameters']); // No + Date + Time + parameters
-            $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($totalColumns);
+            $totalColumns = 3 + count($parameterInfo); // No + Date + Time + params
+            $lastCol      = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($totalColumns);
 
-            // Add header information
             $row = 1;
 
-            // Add logo if exists
+            // Logo
             $logoPath = public_path('assets/img/HasSolution.png');
             if (file_exists($logoPath)) {
                 $drawing = new \PhpOffice\PhpSpreadsheet\Worksheet\Drawing();
-                $drawing->setName('Logo');
-                $drawing->setDescription('Company Logo');
-                $drawing->setPath($logoPath);
-                $drawing->setHeight(60);
-                $drawing->setCoordinates('A1');
-                $drawing->setOffsetX(10);
-                $drawing->setOffsetY(5);
-                $drawing->setWorksheet($sheet);
-
-                // Set row height for logo
+                $drawing->setName('Logo')->setDescription('Company Logo')
+                    ->setPath($logoPath)->setHeight(60)
+                    ->setCoordinates('A1')->setOffsetX(10)->setOffsetY(5)
+                    ->setWorksheet($sheet);
                 $sheet->getRowDimension(1)->setRowHeight(50);
-                $row += 2; // Skip rows for logo space
+                $row += 2;
             }
 
-            // Header Title
+            // Title row
             $sheet->setCellValue("A{$row}", 'Device Report');
             $sheet->mergeCells("A{$row}:{$lastCol}{$row}");
             $sheet->getStyle("A{$row}")->getFont()->setBold(true)->setSize(16);
             $sheet->getStyle("A{$row}")->getAlignment()->setHorizontal('center');
             $row++;
 
-            // Device Information
-            $sheet->setCellValue("A{$row}", 'Device ID:');
-            $sheet->setCellValue("B{$row}", $reportData['device_id']);
-            $sheet->getStyle("A{$row}")->getFont()->setBold(true);
-            $row++;
-
-            $sheet->setCellValue("A{$row}", 'Category:');
-            $sheet->setCellValue("B{$row}", $reportData['device_category']);
-            $sheet->getStyle("A{$row}")->getFont()->setBold(true);
-            $row++;
-
-            $sheet->setCellValue("A{$row}", 'Parameters:');
-            $paramLabels = array_map(function ($param) {
-                return $param['parameter_label'];
-            }, $reportData['parameters']);
-            $sheet->setCellValue("B{$row}", implode(', ', $paramLabels));
-            $sheet->mergeCells("B{$row}:{$lastCol}{$row}");
-            $sheet->getStyle("A{$row}")->getFont()->setBold(true);
-            $row++;
-
-            $sheet->setCellValue("A{$row}", 'Date Range:');
-            $sheet->setCellValue("B{$row}", $startDate . ' to ' . $endDate);
-            $sheet->getStyle("A{$row}")->getFont()->setBold(true);
-            $row++;
-
+            // Info rows
+            $infoData = [
+                'Device ID:'    => $device->device_id,
+                'Category:'     => $device->device_category,
+                'Parameters:'   => implode(', ', array_column($parameterInfo, 'parameter_label')),
+                'Date Range:'   => "{$startDate} to {$endDate}",
+                'Generated On:' => Carbon::now()->format('Y-m-d H:i:s'),
+            ];
+            // Reserve a row for Total Records (filled after data loop)
+            $totalRecordsRow = null;
+            foreach ($infoData as $label => $value) {
+                $sheet->setCellValue("A{$row}", $label);
+                $sheet->getStyle("A{$row}")->getFont()->setBold(true);
+                $sheet->setCellValue("B{$row}", $value);
+                if ($label === 'Parameters:') {
+                    $sheet->mergeCells("B{$row}:{$lastCol}{$row}");
+                }
+                $row++;
+            }
+            // Insert "Total Records" placeholder (value updated after cursor loop)
             $sheet->setCellValue("A{$row}", 'Total Records:');
-            $sheet->setCellValue("B{$row}", $reportData['total_records']);
             $sheet->getStyle("A{$row}")->getFont()->setBold(true);
+            $sheet->setCellValue("B{$row}", '…');
+            $totalRecordsRow = $row;
             $row++;
 
-            $sheet->setCellValue("A{$row}", 'Generated On:');
-            $sheet->setCellValue("B{$row}", Carbon::now()->format('Y-m-d H:i:s'));
-            $sheet->getStyle("A{$row}")->getFont()->setBold(true);
-            $row++;
-
-            // Table header row number
             $tableHeaderRow = $row;
 
-            // Add table headers
-            $col = 'A';
-            $sheet->setCellValue($col . $row, 'No');
-            $sheet->getStyle($col . $row)->getFont()->setBold(true);
-            $col++;
-
-            $sheet->setCellValue($col . $row, 'Date');
-            $sheet->getStyle($col . $row)->getFont()->setBold(true);
-            $col++;
-
-            $sheet->setCellValue($col . $row, 'Time');
-            $sheet->getStyle($col . $row)->getFont()->setBold(true);
-            $col++;
-
-            // Add parameter headers
-            foreach ($reportData['parameters'] as $param) {
-                $headerText = $param['parameter_label'];
-                if (!empty($param['parameter_unit'])) {
-                    $headerText .= ' (' . $param['parameter_unit'] . ')';
-                }
-                $sheet->setCellValue($col . $row, $headerText);
-                $sheet->getStyle($col . $row)->getFont()->setBold(true);
-                $col++;
+            // Table column headers
+            $colIdx = 1;
+            foreach (['No', 'Date', 'Time'] as $hdr) {
+                $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx);
+                $sheet->setCellValue("{$colLetter}{$row}", $hdr);
+                $sheet->getStyle("{$colLetter}{$row}")->getFont()->setBold(true);
+                $colIdx++;
             }
-
-            // Style header row
+            foreach ($parameterInfo as $param) {
+                $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx);
+                $hdrText   = $param['parameter_label'] . (!empty($param['parameter_unit']) ? ' (' . $param['parameter_unit'] . ')' : '');
+                $sheet->setCellValue("{$colLetter}{$row}", $hdrText);
+                $sheet->getStyle("{$colLetter}{$row}")->getFont()->setBold(true);
+                $colIdx++;
+            }
             $sheet->getStyle("A{$row}:{$lastCol}{$row}")->getFill()
                 ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
                 ->getStartColor()->setARGB('FFD9D9D9');
             $sheet->getStyle("A{$row}:{$lastCol}{$row}")->getAlignment()->setHorizontal('center');
 
-            // Add data rows
-            $row++;
-            foreach ($reportData['data'] as $dataRow) {
-                $col = 'A';
-                $sheet->setCellValue($col . $row, $dataRow['no']);
-                $col++;
+            // ── Stream data via cursor() ─────────────────────────────────
+            // cursor() returns rows one at a time – O(1) PHP memory regardless of dataset size.
+            // We group consecutive rows that share the same minute-bucket on the fly.
+            $dataRow      = $row + 1;
+            $no           = 1;
+            $prevMin      = null;
+            $currentGroup = null;
 
-                $sheet->setCellValue($col . $row, $dataRow['date']);
-                $col++;
+            $cursor = DataModel::select(
+                DB::raw("DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i') as timestamp_minute"),
+                'parameter_name',
+                'value',
+                'timestamp'
+            )
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameters)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->orderBy('timestamp', 'asc')
+                ->cursor();
 
-                $sheet->setCellValue($col . $row, date('H:i', strtotime($dataRow['recorded_at'])));
-                $col++;
-
-                foreach ($reportData['parameters'] as $param) {
-                    $value = $dataRow[$param['parameter_name']] ?? '';
-                    $sheet->setCellValue($col . $row, $value);
-                    $col++;
+            foreach ($cursor as $item) {
+                if ($prevMin !== $item->timestamp_minute) {
+                    if ($currentGroup !== null) {
+                        $this->writeExcelDataRow($sheet, $dataRow++, $no++, $currentGroup, $parameters);
+                    }
+                    $prevMin      = $item->timestamp_minute;
+                    $currentGroup = ['timestamp' => $item->timestamp, 'values' => []];
                 }
-                $row++;
+                $currentGroup['values'][$item->parameter_name] = round(floatval($item->value), 2);
+            }
+            if ($currentGroup !== null) {
+                $this->writeExcelDataRow($sheet, $dataRow++, $no++, $currentGroup, $parameters);
             }
 
+            $totalRecords = $no - 1;
+            // Fill in the previously reserved Total Records cell
+            $sheet->setCellValue("B{$totalRecordsRow}", $totalRecords);
+
+            // ── Post-loop formatting ─────────────────────────────────────
             // Auto-size columns
-            foreach (range('A', $lastCol) as $columnID) {
-                $sheet->getColumnDimension($columnID)->setAutoSize(true);
+            for ($c = 1; $c <= $totalColumns; $c++) {
+                $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
             }
 
-            // Add borders to table
-            $tableRange = "A{$tableHeaderRow}:{$lastCol}" . ($row - 1);
-            $sheet->getStyle($tableRange)->getBorders()->getAllBorders()
-                ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+            // Borders on the full table range
+            $lastDataRow = $dataRow - 1;
+            if ($lastDataRow >= $tableHeaderRow) {
+                $sheet->getStyle("A{$tableHeaderRow}:{$lastCol}{$lastDataRow}")
+                    ->getBorders()->getAllBorders()
+                    ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+            }
 
-            // Freeze panes at table header
-            $freezeRow = $tableHeaderRow + 1;
-            $sheet->freezePane("A{$freezeRow}");
+            // Freeze header row
+            $sheet->freezePane('A' . ($tableHeaderRow + 1));
 
-            // Generate filename
+            // ── Save to temp file and stream ─────────────────────────────
+            $tmpDir = storage_path('app/temp');
+            if (!is_dir($tmpDir)) {
+                mkdir($tmpDir, 0755, true);
+            }
+            $tmpFile = $tmpDir . '/excel_' . uniqid() . '.xlsx';
+            $writer  = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+            $writer->save($tmpFile);
+            unset($spreadsheet, $writer); // Free memory before streaming
+
             $filename = "Report_{$deviceId}_{$startDate}_to_{$endDate}.xlsx";
 
-            // Create writer and output
-            $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+            return response()->download($tmpFile, $filename, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ])->deleteFileAfterSend(true);
 
-            // Set headers for download
-            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            header('Content-Disposition: attachment; filename="' . $filename . '"');
-            header('Cache-Control: max-age=0');
-            header('Cache-Control: max-age=1');
-            header('Expires: Mon, 26 Jul 1997 05:00:00 GMT');
-            header('Last-Modified: ' . gmdate('D, d M Y H:i:s') . ' GMT');
-            header('Cache-Control: cache, must-revalidate');
-            header('Pragma: public');
-
-            $writer->save('php://output');
-            exit;
         } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $e->errors()
-            ], 422);
+            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $e->errors()], 422);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to generate Excel: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Failed to generate Excel: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Write a single grouped data row into the spreadsheet.
+     * Kept as a separate method to keep the main export method readable
+     * and to avoid per-call style overhead inside the hot loop.
+     */
+    private function writeExcelDataRow(
+        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
+        int   $dataRow,
+        int   $no,
+        array $group,
+        array $parameters
+    ): void {
+        $tz       = config('app.timezone', 'UTC');
+        $dateTime = Carbon::createFromTimestamp($group['timestamp'], 'UTC')->setTimezone($tz);
+
+        $colIdx = 1;
+        foreach ([$no, $dateTime->format('Y-m-d'), $dateTime->format('H:i:s')] as $val) {
+            $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx++);
+            $sheet->setCellValue("{$colLetter}{$dataRow}", $val);
+        }
+        foreach ($parameters as $paramName) {
+            $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx++);
+            $sheet->setCellValue("{$colLetter}{$dataRow}", $group['values'][$paramName] ?? '');
         }
     }
 
