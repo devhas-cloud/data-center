@@ -79,6 +79,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/admin/manage-sensors', [AdminSensorController::class, 'manageSensors'])->name('admin.manage_sensors');
     Route::get('/admin/sensors', [AdminSensorController::class, 'index']);
     Route::post('/admin/sensors', [AdminSensorController::class, 'store']);
+    Route::post('/admin/sensors/bulk', [AdminSensorController::class, 'storeBulk']);
     Route::get('/admin/sensors/{id}', [AdminSensorController::class, 'show']);
     Route::put('/admin/sensors/{id}', [AdminSensorController::class, 'update']);
     Route::delete('/admin/sensors/{id}', [AdminSensorController::class, 'destroy']);
@@ -155,6 +156,8 @@ Route::middleware(['auth', 'role:user', 'single.session'])->group(function () {
 
     // Report table data
     Route::get('/user/report-table-data', [UserController::class, 'getTableDeviceReport'])->name('user.report_table_data');
+    Route::get('/user/report-hour-count', [UserController::class, 'getHourCountSummary'])->name('user.report_hour_count');
+    Route::get('/user/report-hour-avg',   [UserController::class, 'getHourAvgSummary'])->name('user.report_hour_avg');
 
     // Export routes
     Route::get('/user/export-report-pdf', [UserController::class, 'exportReportPdf'])->name('user.export_report_pdf');

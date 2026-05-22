@@ -18,12 +18,12 @@ class AdminDeviceController extends Controller
     {
         if(Auth::user()->level === 'master'){
             $devices = DeviceModel::with('user')->get();
-            
+
         } else {
             $devices = DeviceModel::with('user')->where('user_assigned', '=', Auth::user()->id)->get();
         }
         return response()->json($devices);
-        
+
     }
 
     public function manageDevices()
@@ -69,6 +69,7 @@ class AdminDeviceController extends Controller
                     'device_name'   => 'nullable|string|max:255',
                     'device_ip'      => 'nullable|ip',
                     'device_gap_timeout' => 'nullable|integer|min:1',
+                    'device_hourly_data' => 'nullable|integer|min:0',
                     'location'        => 'nullable|string|max:255',
                     'district'        => 'nullable|string|max:255',
                     'latitude'        => 'nullable|numeric|between:-90,90',
@@ -94,7 +95,7 @@ class AdminDeviceController extends Controller
             //user assigned default, id user yang buat device
             if (empty($data['user_assigned'])) {
                 $data['user_assigned'] = Auth::id();
-            } 
+            }
 
 
             // Sanitize string inputs
@@ -103,6 +104,7 @@ class AdminDeviceController extends Controller
             if (isset($data['device_name'])) $data['device_name'] = trim($data['device_name']);
             if (isset($data['device_ip'])) $data['device_ip'] = trim($data['device_ip']);
             if (isset($data['device_gap_timeout'])) $data['device_gap_timeout'] = trim($data['device_gap_timeout']);
+            if (isset($data['device_hourly_data'])) $data['device_hourly_data'] = trim($data['device_hourly_data']);
             if (isset($data['location'])) $data['location'] = trim($data['location']);
             if (isset($data['district'])) $data['district'] = trim($data['district']);
 
@@ -164,6 +166,7 @@ class AdminDeviceController extends Controller
                     'device_name'   => 'sometimes|nullable|string|max:255',
                     'device_ip'      => 'sometimes|nullable|ip',
                     'device_gap_timeout' => 'sometimes|nullable|integer|min:1',
+                    'device_hourly_data' => 'sometimes|nullable|integer|min:0',
                     'location'        => 'sometimes|nullable|string|max:255',
                     'district'        => 'sometimes|nullable|string|max:255',
                     'latitude'        => 'sometimes|nullable|numeric|between:-90,90',
@@ -178,6 +181,8 @@ class AdminDeviceController extends Controller
                     'device_ip.ip' => 'Device IP must be a valid IP address',
                     'device_gap_timeout.integer' => 'Device GAP Timeout must be an integer',
                     'device_gap_timeout.min' => 'Device GAP Timeout must be at least 1',
+                    'device_hourly_data.integer' => 'Device Hourly Data must be an integer',
+                    'device_hourly_data.min' => 'Device Hourly Data must be at least 0',
                     'device_category.required' => 'Device category is required',
                     'latitude.between' => 'Latitude must be between -90 and 90',
                     'longitude.between' => 'Longitude must be between -180 and 180',
@@ -189,7 +194,7 @@ class AdminDeviceController extends Controller
                 $data['user_assigned'] = Auth::id();
             }
 
-            
+
 
 
 
@@ -199,6 +204,7 @@ class AdminDeviceController extends Controller
             if (isset($data['device_name'])) $data['device_name'] = trim($data['device_name']);
             if (isset($data['device_ip'])) $data['device_ip'] = trim($data['device_ip']);
             if (isset($data['device_gap_timeout'])) $data['device_gap_timeout'] = trim($data['device_gap_timeout']);
+            if (isset($data['device_hourly_data'])) $data['device_hourly_data'] = trim($data['device_hourly_data']);
             if (isset($data['location'])) $data['location'] = trim($data['location']);
             if (isset($data['district'])) $data['district'] = trim($data['district']);
 
@@ -208,7 +214,7 @@ class AdminDeviceController extends Controller
                 if ($device->linked_img && Storage::disk('public')->exists($device->linked_img)) {
                     Storage::disk('public')->delete($device->linked_img);
                 }
-                
+
                 $file = $request->file('linked_img');
                 $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
                 $path = $file->storeAs('device_images', $filename, 'public');
@@ -277,7 +283,7 @@ class AdminDeviceController extends Controller
         }
     }
 
-   
+
 
 
 

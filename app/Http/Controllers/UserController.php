@@ -900,12 +900,10 @@ class UserController extends Controller
             }
 
             // Get device IDs that already have reports
-            $reportedDeviceIds = AutoReportModel::pluck('device_id')->toArray();
+            //$reportedDeviceIds = AutoReportModel::pluck('device_id')->toArray();
 
             // Filter available devices (not yet in reports)
-            $availableDevices = $userDevices->filter(function ($device) use ($reportedDeviceIds) {
-                return !in_array($device->device_id, $reportedDeviceIds);
-            })->map(function ($device) {
+            $availableDevices = $userDevices->map(function ($device) {
                 return [
                     'device_id' => $device->device_id,
                     'device_category' => $device->device_category,
@@ -915,6 +913,8 @@ class UserController extends Controller
             // Get all reports for user's devices with device category
             $reports = AutoReportModel::whereIn('device_id', $userDevices->pluck('device_id'))
                 ->with('device:device_id,device_category')
+                ->orderBy('device_id')
+                ->orderBy('schedule_report')
                 ->get()
                 ->map(function ($report) {
                     return [
@@ -1032,11 +1032,12 @@ class UserController extends Controller
             }
 
             // Check if report already exists for this device
-            $existingReport = AutoReportModel::where('device_id', $validated['device_id'])->first();
+            $existingReport = AutoReportModel::where('device_id', $validated['device_id'])->where('schedule_report', $validated['schedule'])->first();
             if ($existingReport) {
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Report already exists for this device'
+                    'message' => 'Report already exists for this device and schedule. Please update the existing report instead.'
                 ], 400);
             }
 
@@ -1408,6 +1409,10 @@ class UserController extends Controller
         }
     }
 
+
+
+
+
     /**
      * Return the expected row count for an export (fast COUNT query).
      * Used by the frontend to show warnings before downloading large files.
@@ -1695,6 +1700,242 @@ class UserController extends Controller
         foreach ($parameters as $paramName) {
             $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx++);
             $sheet->setCellValue("{$colLetter}{$dataRow}", $group['values'][$paramName] ?? '');
+        }
+    }
+
+    /**
+     * Return hourly COUNT of distinct minute-slots per date for a given parameter.
+     * parameter_name is optional — defaults to first active sensor.
+     * Always count mode; returns full sensor list for the dropdown.
+     */
+    public function getHourCountSummary(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'device_id'      => 'required|string|exists:tbl_device,device_id',
+                'start_date'     => 'required|string',
+                'end_date'       => 'required|string',
+                'parameter_name' => 'nullable|string',
+            ]);
+
+            $deviceId      = $validated['device_id'];
+            $startDate     = $validated['start_date'];
+            $endDate       = $validated['end_date'];
+            $parameterName = $validated['parameter_name'] ?? null;
+
+            // Verify device access
+            $device = DeviceModel::where('device_id', $deviceId)
+                ->whereIn('id', function ($q) {
+                    $q->select('device_id')->from('tbl_access')->where('user_id', Auth::id());
+                })
+                ->select('device_id','device_hourly_data', 'device_category')
+                ->first();
+
+            if (!$device) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+
+            $startDateObj  = Carbon::parse($startDate);
+            $endDateObj    = Carbon::parse($endDate);
+            $startDateUnix = $startDateObj->timestamp;
+            $endDateUnix   = (clone $endDateObj)->addSeconds(59)->timestamp;
+            $startHour     = (int) $startDateObj->format('H');
+            $device_hourly_data = $device->device_hourly_data ?? 0;
+
+            // All active sensors for the dropdown
+            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+                ->where('tbl_sensor.status', 'active')
+                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+                ->select('tbl_sensor.parameter_name', 'tbl_parameter.parameter_label', 'tbl_sensor.sensor_unit')
+                ->orderBy('tbl_sensor.id', 'asc')
+                ->get();
+
+            if ($sensors->isEmpty()) {
+                return response()->json(['success' => false, 'message' => 'No active sensors found'], 404);
+            }
+
+            $parameterList = $sensors->map(fn($s) => [
+                'parameter_name'  => $s->parameter_name,
+                'parameter_label' => $s->parameter_label ?? $s->parameter_name,
+                'parameter_unit'  => $s->sensor_unit ?? '',
+            ])->toArray();
+
+            // Resolve which parameter to count (default = first sensor)
+            $useParam   = $sensors->first()->parameter_name;
+            $paramLabel = $sensors->first()->parameter_label ?? $useParam;
+            $paramUnit  = $sensors->first()->sensor_unit ?? '';
+
+            if ($parameterName) {
+                $matched = $sensors->firstWhere('parameter_name', $parameterName);
+                if ($matched) {
+                    $useParam   = $parameterName;
+                    $paramLabel = $matched->parameter_label ?? $parameterName;
+                    $paramUnit  = $matched->sensor_unit ?? '';
+                }
+            }
+
+            // Count distinct minute-slots per hour (data-coverage metric)
+            $rows = DB::table('tbl_data')
+                ->selectRaw("DATE(FROM_UNIXTIME(`timestamp`)) as `date`")
+                ->selectRaw("HOUR(FROM_UNIXTIME(`timestamp`)) as `hour`")
+                ->selectRaw("COUNT(DISTINCT DATE_FORMAT(FROM_UNIXTIME(`timestamp`), '%Y-%m-%d %H:%i')) as val")
+                ->where('device_id', $deviceId)
+                ->where('parameter_name', $useParam)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('date', 'hour')
+                ->orderBy('date', 'asc')
+                ->orderBy('hour', 'asc')
+                ->get();
+
+            // Organise into [ 'YYYY-MM-DD' => [0..23 => count|null] ]
+            // Generate full date range first — every date gets a null-filled slot,
+            // so dates with no DB data are still present and ordered correctly.
+            $byDate     = [];
+            $allDates   = [];
+            $dateCursor = $startDateObj->copy()->startOfDay();
+            $dateEnd    = $endDateObj->copy()->startOfDay();
+            while ($dateCursor->lte($dateEnd)) {
+                $d          = $dateCursor->format('Y-m-d');
+                $allDates[] = $d;
+                $byDate[$d] = array_fill(0, 24, null);
+                $dateCursor->addDay();
+            }
+
+            // Fill in actual counts from the DB query
+            foreach ($rows as $row) {
+                $d = $row->date;
+                $h = (int) $row->hour;
+                if (!isset($byDate[$d])) {
+                    // Safety: date outside generated range — add it anyway
+                    $byDate[$d] = array_fill(0, 24, null);
+                    $allDates[] = $d;
+                }
+                $byDate[$d][$h] = (int) $row->val;
+            }
+
+            sort($allDates);
+
+            return response()->json([
+                'success'     => true,
+                'start_hour'  => "00",
+                'hourly_data' => $device_hourly_data,
+                'dates'       => $allDates,
+                'by_date'     => $byDate,
+                'param_name'  => $useParam,
+                'param_label' => $paramLabel,
+                'param_unit'  => $paramUnit,
+                'parameters'  => $parameterList,
+                'date_range'  => ['start' => $startDate, 'end' => $endDate],
+            ]);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $e->errors()], 422);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Return hourly AVG value per date for ALL active parameters in one pass.
+     * Response: by_date_param[date][parameter_name] = [h0..h23] (float|null).
+     */
+    public function getHourAvgSummary(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'device_id'  => 'required|string|exists:tbl_device,device_id',
+                'start_date' => 'required|string',
+                'end_date'   => 'required|string',
+            ]);
+
+            $deviceId  = $validated['device_id'];
+            $startDate = $validated['start_date'];
+            $endDate   = $validated['end_date'];
+
+            // Verify device access
+            $device = DeviceModel::where('device_id', $deviceId)
+                ->whereIn('id', function ($q) {
+                    $q->select('device_id')->from('tbl_access')->where('user_id', Auth::id());
+                })
+                ->select('device_id', 'device_category')
+                ->first();
+
+            if (!$device) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+
+            $startDateObj  = Carbon::parse($startDate);
+            $endDateObj    = Carbon::parse($endDate);
+            $startDateUnix = $startDateObj->timestamp;
+            $endDateUnix   = (clone $endDateObj)->addSeconds(59)->timestamp;
+            $startHour     = (int) $startDateObj->format('H');
+
+            // All active sensors
+            $sensors = SensorModel::where('tbl_sensor.device_id', $deviceId)
+                ->where('tbl_sensor.status', 'active')
+                ->join('tbl_parameter', 'tbl_sensor.parameter_name', '=', 'tbl_parameter.parameter_name')
+                ->select('tbl_sensor.parameter_name', 'tbl_parameter.parameter_label', 'tbl_sensor.sensor_unit')
+                ->orderBy('tbl_sensor.id', 'asc')
+                ->get();
+
+            if ($sensors->isEmpty()) {
+                return response()->json(['success' => false, 'message' => 'No active sensors found'], 404);
+            }
+
+            $parameterNames = $sensors->pluck('parameter_name')->toArray();
+            $parameterList  = $sensors->map(fn($s) => [
+                'parameter_name'  => $s->parameter_name,
+                'parameter_label' => $s->parameter_label ?? $s->parameter_name,
+                'parameter_unit'  => $s->sensor_unit ?? '',
+            ])->toArray();
+
+            // Single query for all parameters: group by date, hour, parameter_name
+            $rows = DB::table('tbl_data')
+                ->selectRaw("DATE(FROM_UNIXTIME(`timestamp`)) as `date`")
+                ->selectRaw("HOUR(FROM_UNIXTIME(`timestamp`)) as `hour`")
+                ->selectRaw("`parameter_name`")
+                ->selectRaw("ROUND(AVG(`value`), 2) as val")
+                ->where('device_id', $deviceId)
+                ->whereIn('parameter_name', $parameterNames)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->groupBy('date', 'hour', 'parameter_name')
+                ->orderBy('date', 'asc')
+                ->orderBy('parameter_name', 'asc')
+                ->orderBy('hour', 'asc')
+                ->get();
+
+            // Organise: byDateParam[date][parameter_name] = [0..23 => float|null]
+            $byDateParam = [];
+            $allDates    = [];
+            foreach ($rows as $row) {
+                $d = $row->date;
+                $p = $row->parameter_name;
+                $h = (int) $row->hour;
+                if (!isset($byDateParam[$d])) {
+                    $byDateParam[$d] = [];
+                    foreach ($parameterNames as $pn) {
+                        $byDateParam[$d][$pn] = array_fill(0, 24, null);
+                    }
+                    $allDates[] = $d;
+                }
+                $byDateParam[$d][$p][$h] = (float) $row->val;
+            }
+
+            sort($allDates);
+
+            return response()->json([
+                'success'       => true,
+                'start_hour'    => $startHour,
+                'dates'         => $allDates,
+                'by_date_param' => $byDateParam,
+                'parameters'    => $parameterList,
+                'date_range'    => ['start' => $startDate, 'end' => $endDate],
+            ]);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $e->errors()], 422);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 

@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class DeviceModel extends Model
 {
     protected $table = 'tbl_device';
-    protected $fillable = ['device_id', 'device_category', 'user_assigned', 'device_name', 'location', 'district', 'latitude', 'longitude', 'device_ip', 'device_gap_timeout', 'date_installation', 'linked_img'];
+    protected $fillable = ['device_id', 'device_category', 'user_assigned', 'device_name', 'location', 'district', 'latitude', 'longitude', 'device_ip', 'device_gap_timeout', 'device_hourly_data', 'date_installation', 'linked_img'];
 
     function sensors()
     {

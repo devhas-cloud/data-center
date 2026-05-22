@@ -47,7 +47,7 @@
                         <div class="modal-body">
                             <form id="deviceForm">
                                 <input type="hidden" id="deviceId" name="deviceId">
-                                
+
                                 <div class="row">
                                     <div class="col-md-6">
                                         <div class="mb-3">
@@ -71,6 +71,16 @@
                                                 <input type="number" class="form-control" id="device_gap_timeout" name="device_gap_timeout" placeholder="e.g., 10" min="1" value="3">
                                                 <span class="input-group-text">Minutes</span>
                                             </div>
+
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="device_hourly_data" class="form-label">Device Hourly Data</label>
+                                            <div class="input-group">
+                                                <input type="number" class="form-control" id="device_hourly_data" name="device_hourly_data" placeholder="e.g., 5" min="0">
+                                                <span class="input-group-text">Data</span>
+                                            </div>
+
                                         </div>
 
                                         <div class="mb-3">
@@ -88,12 +98,12 @@
                                             <input type="date" class="form-control" id="date_installation" name="date_installation">
                                         </div>
 
-                                        
-                                       
+
+
                                     </div>
 
                                     <div class="col-md-6">
-                                        
+
 
                                         <div class="mb-3">
                                             <label for="location" class="form-label">Location</label>
@@ -123,7 +133,7 @@
                                                 @foreach ($users as $user)
                                                     <option value="{{ $user->id }}">{{ $user->name }} ({{ $user->email }})</option>
                                                 @endforeach
-                                            </select>   
+                                            </select>
                                         </div>
                                         @endif
 
@@ -138,7 +148,7 @@
                                         </div>
 
 
-                                        
+
                                     </div>
                                 </div>
                             </form>
@@ -225,7 +235,7 @@
                             return $('<div/>').text(data).html(); // Escape HTML
                         }
                     },
-                    
+
                     {
                         data: 'location',
                         render: function(data, type, row) {
@@ -328,6 +338,7 @@
                         $('#device_id').val(String(data.device_id || '').substring(0, 255));
                         $('#device_ip').val(String(data.device_ip || '').substring(0, 255));
                         $('#device_gap_timeout').val(data.device_gap_timeout);
+                        $('#device_hourly_data').val(data.device_hourly_data);
                         $('#device_category').val(data.device_category);
                         $('#device_name').val(String(data.device_name || '').substring(0, 255));
                         $('#location').val(String(data.location || '').substring(0, 255));
@@ -336,7 +347,7 @@
                         $('#longitude').val(data.longitude);
                         $('#user_assigned').val(data.user_assigned).trigger('change');
                         $('#date_installation').val(data.date_installation || '');
-                        
+
                         // Show current image if exists
                         if (data.linked_img) {
                             $('#current_image').attr('src', '/storage/' + data.linked_img);
@@ -362,6 +373,7 @@
                 const device_id = $('#device_id').val().trim();
                 const device_ip = $('#device_ip').val().trim();
                 const device_gap_timeout = $('#device_gap_timeout').val().trim();
+                const device_hourly_data = $('#device_hourly_data').val().trim();
                 const device_category = $('#device_category').val();
                 const device_name = $('#device_name').val().trim();
                 const location = $('#location').val().trim();
@@ -387,6 +399,12 @@
                 if (!device_gap_timeout || isNaN(device_gap_timeout) || parseInt(device_gap_timeout) <= 0) {
                     Swal.fire('Validation Error', 'Device GAP Timeout must be a positive integer', 'error');
                     $('#device_gap_timeout').focus();
+                    return;
+                }
+
+                if (device_hourly_data && (isNaN(device_hourly_data) || parseInt(device_hourly_data) < 0)) {
+                    Swal.fire('Validation Error', 'Device Hourly Data must be a non-negative integer', 'error');
+                    $('#device_hourly_data').focus();
                     return;
                 }
 
@@ -499,12 +517,13 @@
 
                 const url = id ? `/admin/devices/${id}` : '/admin/devices';
                 const method = id ? 'POST' : 'POST'; // Always POST for FormData
-                
+
                 // Use FormData for file upload
                 const formData = new FormData();
                 formData.append('device_id', device_id);
                 formData.append('device_ip', device_ip);
                 formData.append('device_gap_timeout', device_gap_timeout);
+                formData.append('device_hourly_data', device_hourly_data);
                 formData.append('device_category', device_category);
                 formData.append('device_name', device_name);
                 formData.append('location', location);
@@ -512,12 +531,12 @@
                 formData.append('latitude', latitude);
                 formData.append('longitude', longitude);
                 if (user_assigned) formData.append('user_assigned', user_assigned);
-                
+
                 const date_installation = $('#date_installation').val();
                 if (date_installation) formData.append('date_installation', date_installation);
-                
+
                 if (imageFile) formData.append('linked_img', imageFile);
-                
+
                 // Add _method for PUT when editing
                 if (id) {
                     formData.append('_method', 'PUT');
@@ -626,7 +645,7 @@
                  theme: 'bootstrap-5',
                  dropdownParent: $('#deviceModal')
                 });
-            
+
               $('#user_assigned').select2({
                  theme: 'bootstrap-5',
                  dropdownParent: $('#deviceModal')
@@ -640,12 +659,12 @@
                 $('#linked_img').val('');
                 $('#current_image_preview').hide();
             });
-            
+
             // Clean up image preview when image modal is hidden
             $('#imagePreviewModal').on('hidden.bs.modal', function () {
                 $('#previewImageTag').attr('src', '');
             });
-           
+
         });
     </script>
 
