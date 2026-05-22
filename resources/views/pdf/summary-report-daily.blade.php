@@ -330,336 +330,131 @@
 
         $buildChart = function (array $data, string $color, string $title, array $labels = []): string {
             $svgW = 740;
-            $svgH = 320;
-
-            $padL = 42;
-            $padR = 16;
-            $padT = 28;
-            $padB = 42;
-
-            $cw = $svgW - $padL - $padR;
-            $ch = $svgH - $padT - $padB;
+            $svgH = 300;
+            $padL = 34;
+            $padR = 8;
+            $padT = 20;
+            $padB = 26;
+            $cw   = $svgW - $padL - $padR;
+            $ch   = $svgH - $padT - $padB;
 
             $n = count($data);
-
             if ($n === 0) {
                 return '';
             }
 
             $nonNull = array_values(array_filter($data, fn($v) => $v !== null));
-
-            $vMin = count($nonNull) ? min($nonNull) : 0;
-            $vMax = count($nonNull) ? max($nonNull) : 1;
-
-            $padding = ($vMax - $vMin) * 0.12;
-
-            if ($padding <= 0) {
-                $padding = 1;
+            $vMin    = count($nonNull) ? min($nonNull) : 0;
+            $vMax    = count($nonNull) ? max($nonNull) : 1;
+            $vRng    = $vMax - $vMin;
+            if ($vRng == 0) {
+                $vMin -= 1;
+                $vMax += 1;
+                $vRng  = 2;
             }
-
-            $vMin -= $padding;
-            $vMax += $padding;
-
-            $vRng = $vMax - $vMin;
 
             $stepX = $n > 1 ? $cw / ($n - 1) : $cw;
+            $toY   = fn($v) => round($padT + $ch - (($v - $vMin) / $vRng) * $ch, 1);
+            $toX   = fn($i) => round($padL + $i * $stepX, 1);
 
-            $toY = fn($v) => round($padT + $ch - (($v - $vMin) / $vRng) * $ch, 1);
-
-            $toX = fn($i) => round($padL + $i * $stepX, 1);
-
-            $points = [];
-
+            $segments = [];
+            $cur      = [];
             for ($i = 0; $i < $n; $i++) {
                 if ($data[$i] !== null) {
-                    $points[] = [
-                        'x' => $toX($i),
-                        'y' => $toY($data[$i]),
-                        'value' => $data[$i],
-                    ];
+                    $cur[] = [$toX($i), $toY($data[$i])];
+                } else {
+                    if (!empty($cur)) {
+                        $segments[] = $cur;
+                    }
+                    $cur = [];
+                }
+            }
+            if (!empty($cur)) {
+                $segments[] = $cur;
+            }
+
+            $dotPoints = [];
+            for ($i = 0; $i < $n; $i++) {
+                if ($data[$i] !== null) {
+                    $dotPoints[] = [$toX($i), $toY($data[$i])];
                 }
             }
 
-            if (empty($points)) {
-                return '';
-            }
+            $svg  = "<svg xmlns='http://www.w3.org/2000/svg' width='{$svgW}' height='{$svgH}'>";
+            $svg .= "<rect width='{$svgW}' height='{$svgH}' fill='white'/>";
 
-            /*
-    |--------------------------------------------------------------------------
-    | Smooth Path Generator
-    |--------------------------------------------------------------------------
-    */
-            $linePath = '';
-
-            foreach ($points as $i => $p) {
-                if ($i == 0) {
-                    $linePath .= "M {$p['x']} {$p['y']} ";
-                    continue;
-                }
-
-                $prev = $points[$i - 1];
-
-                $cx = ($prev['x'] + $p['x']) / 2;
-
-                $linePath .= "Q {$cx} {$prev['y']} {$p['x']} {$p['y']} ";
-            }
-
-            /*
-    |--------------------------------------------------------------------------
-    | Area Fill
-    |--------------------------------------------------------------------------
-    */
-            $first = $points[0];
-            $last = $points[count($points) - 1];
-
-            $areaPath = $linePath . "L {$last['x']} " . ($padT + $ch) . " L {$first['x']} " . ($padT + $ch) . ' Z';
-
-            $svg = "
-    <svg xmlns='http://www.w3.org/2000/svg'
-         width='{$svgW}'
-         height='{$svgH}'
-         viewBox='0 0 {$svgW} {$svgH}'>
-
-        <defs>
-
-            <linearGradient id='grad-{$color}'
-                            x1='0'
-                            y1='0'
-                            x2='0'
-                            y2='1'>
-
-                <stop offset='0%'
-                      stop-color='{$color}'
-                      stop-opacity='0.30'/>
-
-                <stop offset='100%'
-                      stop-color='{$color}'
-                      stop-opacity='0'/>
-
-            </linearGradient>
-
-            <filter id='shadow'>
-                <feDropShadow dx='0'
-                              dy='1'
-                              stdDeviation='2'
-                              flood-opacity='0.15'/>
-            </filter>
-
-        </defs>
-
-        <rect width='100%'
-              height='100%'
-              fill='white'/>
-    ";
-
-            /*
-    |--------------------------------------------------------------------------
-    | Title
-    |--------------------------------------------------------------------------
-    */
+            $cx   = $padL + $cw / 2;
             $svg .=
-                "
-        <text x='" .
-                $svgW / 2 .
-                "'
-              y='18'
-              text-anchor='middle'
-              font-size='11'
-              font-weight='600'
-              fill='#1f2937'>
-            " .
+                "<text x='{$cx}' y='14' text-anchor='middle' font-size='8' font-weight='bold' fill='#343a40'>" .
                 htmlspecialchars($title) .
-                "
-        </text>
-    ";
+                '</text>';
 
-            /*
-    |--------------------------------------------------------------------------
-    | Grid Y
-    |--------------------------------------------------------------------------
-    */
-            for ($g = 0; $g <= 5; $g++) {
-                $gy = $padT + ($g / 5) * $ch;
-
-                $gv = $vMax - ($g / 5) * $vRng;
-
-                $lbl = round($gv, 1);
-
+            for ($g = 0; $g <= 4; $g++) {
+                $gy  = $padT + ($g / 4) * $ch;
+                $gv  = $vMax - ($g / 4) * $vRng;
+                $lbl = abs($gv) < 0.005 ? '0' : (abs($gv) >= 1000 ? round($gv, 0) : round($gv, 1));
                 $svg .=
-                    "
-            <line x1='{$padL}'
-                  y1='{$gy}'
-                  x2='" .
+                    "<line x1='{$padL}' y1='{$gy}' x2='" .
                     ($padL + $cw) .
-                    "'
-                  y2='{$gy}'
-                  stroke='#eef2f7'
-                  stroke-width='1'/>
-
-            <text x='" .
-                    ($padL - 6) .
-                    "'
-                  y='" .
-                    ($gy + 4) .
-                    "'
-                  text-anchor='end'
-                  font-size='9'
-                  fill='#94a3b8'>
-                {$lbl}
-            </text>
-        ";
+                    "' y2='{$gy}' stroke='#e8e8e8' stroke-width='0.5'/>";
+                $svg .=
+                    "<text x='" .
+                    ($padL - 3) .
+                    "' y='" .
+                    ($gy + 3) .
+                    "' text-anchor='end' font-size='5.5' fill='#888'>{$lbl}</text>";
             }
 
-            /*
-    |--------------------------------------------------------------------------
-    | X Labels
-    |--------------------------------------------------------------------------
-    */
-            $labelInterval = max(1, ceil($n / 8));
-
-            $rotate = $n > 10;
+            $labelInterval = 1;
+            if ($n > 8) {
+                $labelInterval = (int) ceil($n / 6);
+            }
 
             for ($i = 0; $i < $n; $i++) {
-                if ($i % $labelInterval !== 0 && $i != $n - 1) {
-                    continue;
-                }
-
-                $x = $toX($i);
-
-                $label = htmlspecialchars($labels[$i] ?? $i);
-
-                $svg .=
-                    "
-            <line x1='{$x}'
-                  y1='" .
-                    ($padT + $ch) .
-                    "'
-                  x2='{$x}'
-                  y2='" .
-                    ($padT + $ch + 4) .
-                    "'
-                  stroke='#cbd5e1'
-                  stroke-width='1'/>
-        ";
-
-                if ($rotate) {
+                if ($i % $labelInterval == 0 || $i == $n - 1) {
+                    $lx  = $toX($i);
+                    $ly  = $padT + $ch + 12;
+                    $lbl = $labels[$i] ?? $i;
                     $svg .=
-                        "
-                <text x='{$x}'
-                      y='" .
-                        ($padT + $ch + 16) .
-                        "'
-                      transform='rotate(45 {$x}," .
-                        ($padT + $ch + 16) .
-                        ")'
-                      text-anchor='start'
-                      font-size='8'
-                      fill='#94a3b8'>
-                    {$label}
-                </text>
-            ";
-                } else {
-                    $svg .=
-                        "
-                <text x='{$x}'
-                      y='" .
-                        ($padT + $ch + 16) .
-                        "'
-                      text-anchor='middle'
-                      font-size='9'
-                      fill='#94a3b8'>
-                    {$label}
-                </text>
-            ";
+                        "<line x1='{$lx}' y1='" .
+                        ($padT + $ch) .
+                        "' x2='{$lx}' y2='" .
+                        ($padT + $ch + 3) .
+                        "' stroke='#ccc' stroke-width='0.5'/>";
+                    $svg .= "<text x='{$lx}' y='{$ly}' text-anchor='middle' font-size='5' fill='#888'>{$lbl}</text>";
                 }
             }
 
-            /*
-    |--------------------------------------------------------------------------
-    | Axis
-    |--------------------------------------------------------------------------
-    */
+            $axisB = $padT + $ch;
+            $svg .= "<line x1='{$padL}' y1='{$padT}' x2='{$padL}' y2='{$axisB}' stroke='#bbb' stroke-width='0.7'/>";
             $svg .=
-                "
-        <line x1='{$padL}'
-              y1='{$padT}'
-              x2='{$padL}'
-              y2='" .
-                ($padT + $ch) .
-                "'
-              stroke='#cbd5e1'/>
-
-        <line x1='{$padL}'
-              y1='" .
-                ($padT + $ch) .
-                "'
-              x2='" .
+                "<line x1='{$padL}' y1='{$axisB}' x2='" .
                 ($padL + $cw) .
-                "'
-              y2='" .
-                ($padT + $ch) .
-                "'
-              stroke='#cbd5e1'/>
-    ";
+                "' y2='{$axisB}' stroke='#bbb' stroke-width='0.7'/>";
 
-            /*
-    |--------------------------------------------------------------------------
-    | Area Fill
-    |--------------------------------------------------------------------------
-    */
-            $svg .= "
-        <path d='{$areaPath}'
-              fill='url(#grad-{$color})'/>
-    ";
-
-            /*
-    |--------------------------------------------------------------------------
-    | Main Line
-    |--------------------------------------------------------------------------
-    */
-            $svg .= "
-        <path d='{$linePath}'
-              fill='none'
-              stroke='{$color}'
-              stroke-width='3'
-              stroke-linecap='round'
-              stroke-linejoin='round'
-              filter='url(#shadow)'/>
-    ";
-
-            /*
-    |--------------------------------------------------------------------------
-    | Dots
-    |--------------------------------------------------------------------------
-    */
-            foreach ($points as $p) {
-                $svg .= "
-            <circle cx='{$p['x']}'
-                    cy='{$p['y']}'
-                    r='4'
-                    fill='white'
-                    stroke='{$color}'
-                    stroke-width='2'/>
-
-            <circle cx='{$p['x']}'
-                    cy='{$p['y']}'
-                    r='2'
-                    fill='{$color}'/>
-        ";
+            foreach ($segments as $seg) {
+                if (count($seg) === 1) {
+                    [$px, $py] = $seg[0];
+                    $svg .= "<circle cx='{$px}' cy='{$py}' r='2.5' fill='{$color}'/>";
+                } else {
+                    $d    = 'M ' . implode(' L ', array_map(fn($p) => $p[0] . ' ' . $p[1], $seg));
+                    $svg .= "<path fill='none' stroke='{$color}' stroke-width='1.4' d='{$d}'/>";
+                }
+            }
+            foreach ($dotPoints as [$px, $py]) {
+                $svg .= "<circle cx='{$px}' cy='{$py}' r='2' fill='{$color}'/>";
             }
 
             $svg .= '</svg>';
-
             return '<img src="data:image/svg+xml;base64,' .
                 base64_encode($svg) .
                 '" width="' .
                 $svgW .
                 '" height="' .
                 $svgH .
-                '" style="display:block;width:100%;max-width:' .
-                $svgW .
-                'px;" />';
+                '" style="display:block;" />';
         };
+
 
         $chartColors = [
             '#0d6efd',
@@ -790,10 +585,10 @@
 
     <div class="page-break"></div>
     {!! $renderHeader('Hourly Average') !!}
-    <table class="hourly-table">
+    <table class="hourly-table" style="margin-bottom:6px;">
         <thead>
             <tr>
-                <th style="text-align:center;width:55px;">Date / Hour</th>
+                <th style="text-align:center;">Date / Hour</th>
                 @foreach ($stats as $s)
                     <th>{{ $s['parameter_label'] }}@if ($s['parameter_unit'])
                             <br />({{ $s['parameter_unit'] }})
