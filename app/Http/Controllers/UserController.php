@@ -2500,6 +2500,8 @@ class UserController extends Controller
     {
         $unreadCount = AccessModel::with(['device.logs' => function ($query) {
             $query->where('is_read_user', false);
+            // kategori != 'Email' dan kategori != 'WhatsApp' untuk menghitung hanya logs yang belum dibaca tanpa memperhatikan kategori
+            $query->whereNotIn('category', ['Email', 'whatsapp_alert']);
         }])
             ->where('user_id', Auth::user()->id)
             ->get()
@@ -2537,16 +2539,19 @@ class UserController extends Controller
             $cacheTTL = 1; // Cache 1 menit untuk logs
 
             // Check if cached
-            if (Cache::has($cacheKey)) {
-                return response()->json(Cache::get($cacheKey), 200);
-            }
+            // if (Cache::has($cacheKey)) {
+            //     return response()->json(Cache::get($cacheKey), 200);
+            // }
 
             // Get all logs for devices accessible by user
             $query = AccessModel::with(['device.logs' => function ($query) use ($category, $startDateTime, $endDateTime, $status) {
-                $query->orderBy('log_date', 'desc');
+            $query->whereNotIn('category', ['Email', 'whatsapp_alert']); // Exclude email and WhatsApp alert logs
+
+            $query->orderBy('log_date', 'desc');
 
                 if ($category) {
                     $query->where('category', $category);
+
                 }
 
                 if ($startDateTime && $endDateTime) {
@@ -2565,6 +2570,7 @@ class UserController extends Controller
                 });
             }
 
+
             $logs = $query->get()
                 ->flatMap(function ($access) {
                     return $access->device->logs->map(function ($log) use ($access) {
@@ -2581,6 +2587,9 @@ class UserController extends Controller
                         ];
                     });
                 })
+                ->reject(function ($log) {
+                    return in_array($log['category'], ['Email', 'whatsapp_alert'], true);
+                })
                 ->sortByDesc('datetime')
                 ->values();
 
@@ -2589,7 +2598,7 @@ class UserController extends Controller
                 'data' => $logs,
             ];
 
-            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
+            //Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
             return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
