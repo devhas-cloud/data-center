@@ -35,4 +35,15 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Evolution API (WhatsApp)
+    |--------------------------------------------------------------------------
+    */
+    'evolution' => [
+        'url'      => env('EVOLUTION_API_URL', 'http://127.0.0.1:8082'),
+        'instance' => env('EVOLUTION_API_INSTANCE', 'admin'),
+        'apikey'   => env('EVOLUTION_API_KEY', 'fgn45l60ezbhnufy7426zj'),
+    ],
+
 ];

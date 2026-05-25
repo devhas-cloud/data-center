@@ -85,9 +85,18 @@
                                         <input type="password" id="password" class="form-control"
                                             placeholder="Kosongkan jika tidak ingin mengubah" />
                                     </div>
-                                    <div class="col-md-12 mb-3">
+                                    <div class="col-md-8 mb-3">
                                         <label class="form-label">Address</label>
-                                        <textarea id="address" class="form-control" rows="2" required></textarea>
+                                        <textarea id="address" class="form-control" rows="2"></textarea>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">WhatsApp Number</label>
+                                        <div class="input-group">
+                                            <span class="input-group-text"><i class="bi bi-whatsapp text-success"></i></span>
+                                            <input type="text" id="whatsapp_number" class="form-control"
+                                                placeholder="628123456789" maxlength="20" />
+                                        </div>
+                                        <small class="text-muted">Format internasional tanpa '+'</small>
                                     </div>
                                     <div class="col-md-4 mb-3">
                                         <label class="form-label">Role</label>
@@ -154,7 +163,7 @@
 
 
 
-  
+
 @endsection
 @section('script')
   <script>
@@ -280,6 +289,7 @@
                         $('#username').val(data.username);
                         $('#email').val(data.email);
                         $('#address').val(data.address);
+                        $('#whatsapp_number').val(data.whatsapp_number || '');
                         $('#role').val(data.role);
                         // Update level options based on role, then set the current level
                         updateLevelOptions(data.role, data.level);
@@ -396,6 +406,7 @@
                     email: email,
                     password: password,
                     address: address,
+                    whatsapp_number: $('#whatsapp_number').val().trim() || null,
                     role: role,
                     level: $('#level').val(),
                     date_expired: $('#date_expired').val(),
@@ -474,6 +485,7 @@
                 $('#userId').val('');
                 $('#userForm')[0].reset();
                 $('#password').val('');
+                $('#whatsapp_number').val('');
                 // Reset level options based on user level
                 const levelSelect = $('#level');
                 levelSelect.empty();

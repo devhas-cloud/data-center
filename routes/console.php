@@ -20,3 +20,14 @@ Schedule::command('reports:send-auto --type=daily')->dailyAt('07:00');
 Schedule::command('reports:send-auto --type=weekly')->weeklyOn(1, '08:00');
 Schedule::command('reports:send-auto --type=monthly')->monthlyOn(1, '08:00');
 
+/*
+|--------------------------------------------------------------------------
+| WhatsApp Alert Schedules
+|--------------------------------------------------------------------------
+| Checks every 2 minutes whether any sensor parameter in tbl_latest_data
+| exceeds its alert threshold (tbl_sensor.parameter_indicator_alert).
+| If exceeded, sends a WhatsApp reminder to all associated users.
+| A cooldown of 1 hour per device+user prevents duplicate messages.
+*/
+Schedule::command('alerts:send-whatsapp')->everyTwoMinutes();
+

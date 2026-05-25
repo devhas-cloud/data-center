@@ -21,7 +21,7 @@ class AuthController extends Controller
 {
     // Rate limiting: max 5 attempts per minute per IP
     $key = 'login-attempts:' . $request->ip();
-    
+
     if (RateLimiter::tooManyAttempts($key, 5)) {
         $seconds = RateLimiter::availableIn($key);
         throw ValidationException::withMessages([
@@ -42,6 +42,28 @@ class AuthController extends Controller
         $request->session()->regenerate();
 
         $user = Auth::user();
+
+        // ===========================
+        // CEK DATE_EXPIRED (non-admin)
+        // ===========================
+        if ($user->role !== 'admin' && $user->date_expired) {
+            $expired = Carbon::parse($user->date_expired)->endOfDay();
+            if ($expired->isPast()) {
+                Auth::logout();
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
+
+                Log::warning('Login blocked: account expired', [
+                    'username' => $user->username,
+                    'date_expired' => $user->date_expired,
+                    'ip' => $request->ip(),
+                ]);
+
+                return back()->withErrors([
+                    'username' => 'Akun Anda telah kedaluwarsa sejak ' . $expired->format('d/m/Y') . '. Silakan hubungi administrator untuk memperpanjang akses.',
+                ])->onlyInput('username');
+            }
+        }
 
         // ===========================
         // HAPUS SESSION LAMA USER
@@ -96,12 +118,12 @@ class AuthController extends Controller
     public function logout(Request $request)
     {
         $username = Auth::user() ? Auth::user()->username : 'unknown';
-        
+
         Auth::logout();
 
         $request->session()->invalidate();
         $request->session()->regenerateToken();
-        
+
         // Log logout
         Log::info('User logged out', [
             'username' => $username,
@@ -133,7 +155,7 @@ class AuthController extends Controller
     {
         // Rate limiting: max 3 attempts per 5 minutes per IP
         $key = 'password-reset:' . $request->ip();
-        
+
         if (RateLimiter::tooManyAttempts($key, 3)) {
             $seconds = RateLimiter::availableIn($key);
             return back()->withErrors(['username' => 'Too many password reset attempts. Please try again in ' . ceil($seconds / 60) . ' minutes.']);
@@ -142,7 +164,7 @@ class AuthController extends Controller
         $request->validate([
             'username' => 'required|string|max:255'
         ]);
-        
+
         // Sanitize input
         $username = strip_tags(trim($request->username));
 
@@ -154,24 +176,24 @@ class AuthController extends Controller
 
         if (!$user) {
             RateLimiter::hit($key, 300); // 5 minutes
-            
+
             // Log suspicious activity
             Log::warning('Password reset attempted for non-existent user', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             return back()->with('status', $successMessage);
         }
 
         if (!$user->email) {
             RateLimiter::hit($key, 300);
-            
+
             Log::warning('Password reset attempted for user without email', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             return back()->with('status', $successMessage);
         }
 
@@ -191,24 +213,24 @@ class AuthController extends Controller
         // Send email
         try {
             Mail::to($user->email)->send(new ResetPasswordMail($token, $user->username));
-            
+
             RateLimiter::hit($key, 300);
-            
+
             Log::info('Password reset email sent', [
                 'username' => $username,
                 'email' => substr($user->email, 0, 3) . '***' // Partially hide email in logs
             ]);
-            
+
             return back()->with('status', $successMessage);
         } catch (\Exception $e) {
             RateLimiter::hit($key, 300);
-            
+
             // Log error without exposing sensitive details
             Log::error('Failed to send password reset email', [
                 'username' => $username,
                 'error' => $e->getMessage()
             ]);
-            
+
             // Generic error message - DO NOT expose token in production
             return back()->with('status', 'Unable to send reset email at this time. Please contact administrator if the problem persists.');
         }
@@ -223,7 +245,7 @@ class AuthController extends Controller
     {
         // Rate limiting: max 5 attempts per 10 minutes per IP
         $key = 'password-reset-submit:' . $request->ip();
-        
+
         if (RateLimiter::tooManyAttempts($key, 5)) {
             $seconds = RateLimiter::availableIn($key);
             throw ValidationException::withMessages([
@@ -240,7 +262,7 @@ class AuthController extends Controller
             'password.confirmed' => 'Konfirmasi password tidak cocok.',
             'password.regex' => 'Password harus mengandung minimal 1 huruf besar, 1 huruf kecil, dan 1 angka.'
         ]);
-        
+
         // Sanitize inputs
         $username = strip_tags(trim($request->username));
         $token = $request->token;
@@ -252,12 +274,12 @@ class AuthController extends Controller
 
         if (!$passwordReset) {
             RateLimiter::hit($key, 600); // 10 minutes
-            
+
             Log::warning('Invalid password reset token attempt', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             // Generic error message to prevent enumeration
             return back()->withErrors(['token' => 'Token reset password tidak valid atau telah kadaluarsa.']);
         }
@@ -265,41 +287,41 @@ class AuthController extends Controller
         // Check if token matches
         if (!Hash::check($token, $passwordReset->token)) {
             RateLimiter::hit($key, 600);
-            
+
             Log::warning('Password reset token mismatch', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             return back()->withErrors(['token' => 'Token reset password tidak valid atau telah kadaluarsa.']);
         }
 
         // Check if token is expired (60 minutes)
         if (Carbon::parse($passwordReset->created_at)->addMinutes(60)->isPast()) {
             RateLimiter::hit($key, 600);
-            
+
             // Delete expired token
             DB::table('password_reset_tokens')->where('username', $username)->delete();
-            
+
             Log::warning('Expired password reset token used', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             return back()->withErrors(['token' => 'Token reset password tidak valid atau telah kadaluarsa.']);
         }
 
         // Verify user exists
         $user = User::where('username', $username)->first();
-        
+
         if (!$user) {
             RateLimiter::hit($key, 600);
-            
+
             Log::error('Password reset for non-existent user', [
                 'username' => $username,
                 'ip' => $request->ip()
             ]);
-            
+
             return back()->withErrors(['username' => 'User tidak ditemukan.']);
         }
 
@@ -309,10 +331,10 @@ class AuthController extends Controller
 
         // Delete the token after successful password reset
         DB::table('password_reset_tokens')->where('username', $username)->delete();
-        
+
         // Clear rate limiter
         RateLimiter::clear($key);
-        
+
         Log::info('Password successfully reset', [
             'username' => $username,
             'ip' => $request->ip()

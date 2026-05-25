@@ -17,6 +17,7 @@ class User extends Authenticatable
         'email',
         'password',
         'address',
+        'whatsapp_number',
         'role',
         'level',
         'date_expired',

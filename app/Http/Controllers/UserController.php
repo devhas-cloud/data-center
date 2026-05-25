@@ -2305,10 +2305,11 @@ class UserController extends Controller
     {
         try {
             $request->validate([
-                'id' => 'required|exists:tbl_user,id',
-                'name' => 'required|string|max:255',
-                'email' => 'required|email|max:255|unique:tbl_user,email,' . $request->id,
-                'password' => 'nullable|string|min:6',
+                'id'               => 'required|exists:tbl_user,id',
+                'name'             => 'required|string|max:255',
+                'email'            => 'required|email|max:255|unique:tbl_user,email,' . $request->id,
+                'password'         => 'nullable|string|min:6',
+                'whatsapp_number'  => 'nullable|string|max:20',
             ]);
 
             $user = User::find($request->id);
@@ -2321,8 +2322,9 @@ class UserController extends Controller
                 ], 403);
             }
 
-            $user->name = $request->name;
-            $user->email = $request->email;
+            $user->name             = $request->name;
+            $user->email            = $request->email;
+            $user->whatsapp_number  = $request->input('whatsapp_number');
 
             if ($request->filled('password')) {
                 $user->password = bcrypt($request->password);

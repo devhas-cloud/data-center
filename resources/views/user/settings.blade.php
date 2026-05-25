@@ -36,6 +36,17 @@
                                 </div>
 
                                 <div class="col-md-6 mb-3">
+                                    <label for="whatsapp_number" class="form-label">WhatsApp Number</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-whatsapp text-success"></i></span>
+                                        <input type="text" class="form-control" id="whatsapp_number" name="whatsapp_number"
+                                            value="{{ $profile->whatsapp_number }}"
+                                            placeholder="e.g. 628123456789" maxlength="20">
+                                    </div>
+                                    <small class="text-muted">Format internasional tanpa '+' (contoh: 628123456789)</small>
+                                </div>
+
+                                <div class="col-md-6 mb-3">
                                     <label for="password" class="form-label">New Password</label>
                                     <input type="password" class="form-control" id="password" name="password"
                                         placeholder="Leave blank to keep current password">
@@ -142,6 +153,7 @@
                     name: $('#name').val(),
                     email: $('#email').val(),
                     password: $('#password').val(),
+                    whatsapp_number: $('#whatsapp_number').val(),
                     _token: '{{ csrf_token() }}'
                 };
 
@@ -194,8 +206,8 @@
                         });
                     }
                 });
-            
-            
+
+
             });
 
             // Parameter Alert Form Submission with Validation (Multiple Forms)
