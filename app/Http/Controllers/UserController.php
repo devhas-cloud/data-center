@@ -51,7 +51,8 @@ class UserController extends Controller
             ->with([
                 'category:id,category_name,category_icon',
                 'device:id,device_id,device_name,latitude,longitude,device_gap_timeout',
-                'device.sensors:id,device_id,parameter_name'
+                'device.sensors:id,device_id,parameter_name',
+                'device.sensors.parameter:parameter_name,parameter_label',
             ])
             ->get(['id', 'user_id', 'category_id', 'device_id']); // Select parent columns
 
@@ -80,8 +81,15 @@ class UserController extends Controller
                     return $item->device_id . '|' . $item->parameter_name;
                 });
 
+        // Batch-fetch device statuses (1 query instead of N)
+        $deviceObjectsForStatus = $userAccess->pluck('device')->filter()->unique('device_id')
+            ->map(fn($d) => ['device_id' => $d->device_id, 'device_gap_timeout' => $d->device_gap_timeout])
+            ->values()
+            ->toArray();
+        $deviceStatuses = $this->getDeviceStatusBatch($deviceObjectsForStatus);
+
         $result = $userAccess->groupBy('category.category_name')
-            ->map(function ($group) use ($latestDataCollection) {
+            ->map(function ($group) use ($latestDataCollection, $deviceStatuses) {
                 $category = $group->first()->category;
 
                 // Skip jika kategori null
@@ -91,7 +99,7 @@ class UserController extends Controller
 
                 $devices = $group->filter(function ($access) {
                     return $access->device !== null;
-                })->map(function ($access) use ($latestDataCollection) {
+                })->map(function ($access) use ($latestDataCollection, $deviceStatuses) {
                     $device = $access->device;
 
                     $sensorsData = $device->sensors->map(function ($sensor) use ($device, $latestDataCollection) {
@@ -116,7 +124,7 @@ class UserController extends Controller
                         'device_name' => $device->device_name,
                         'latitude'    => $device->latitude,
                         'longitude'   => $device->longitude,
-                        'status'      => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                        'status'      => $deviceStatuses[$device->device_id] ?? 'Offline',
                         'sensors'     => $sensorsData->toArray(),
                     ];
                 })->values();
@@ -138,28 +146,51 @@ class UserController extends Controller
 
     public function DeviceStatus($deviceId, $gapTimeout = 3)
     {
-        // lakukan ping ke IP address tersebut
-        // $ipAddress = $deviceIp;
-        // $pingResult = exec("ping -c 1 " . escapeshellarg($ipAddress), $output, $status);
-        // if ($status === 0) {
-        //     $statusMessage = "Online";
-        // } else {
-        //     $statusMessage = "Offline";
-        // }
-        # Perbaiki metode pengecekan status dimana jika data terakhir lebih dari 6 menit yang lalu, maka dianggap offline
-
         $latestData = DataModel::where('device_id', $deviceId)->orderBy('timestamp', 'desc')->first();
         if (!$latestData) {
             return "Offline";
         }
-        $latestTimestamp = Carbon::createFromTimestamp($latestData->timestamp);
-        $now = Carbon::now();
-        $diffInMinutes = $latestTimestamp->diffInMinutes($now);
-        if ($diffInMinutes > $gapTimeout) {
-            return "Offline";
-        } else {
-            return "Online";
+        $diffInMinutes = Carbon::createFromTimestamp($latestData->timestamp)->diffInMinutes(Carbon::now());
+        return $diffInMinutes > $gapTimeout ? "Offline" : "Online";
+    }
+
+    /**
+     * Batch-compute device statuses for multiple devices at once.
+     * Returns an associative array [ device_id => 'Online'|'Offline' ].
+     *
+     * @param  array  $devices  Array of objects/arrays with keys: device_id, device_gap_timeout
+     */
+    private function getDeviceStatusBatch(array $devices): array
+    {
+        if (empty($devices)) {
+            return [];
         }
+
+        $deviceIds = array_column($devices, 'device_id');
+
+        // One query: get max timestamp per device from tbl_latest_data
+        $latestTimestamps = LatestDataModel::whereIn('device_id', $deviceIds)
+            ->select('device_id', DB::raw('MAX(timestamp) as timestamp'))
+            ->groupBy('device_id')
+            ->pluck('timestamp', 'device_id');
+
+        $now = Carbon::now()->timestamp;
+        $statuses = [];
+
+        foreach ($devices as $device) {
+            $id  = is_array($device) ? $device['device_id'] : $device->device_id;
+            $gap = is_array($device) ? ($device['device_gap_timeout'] ?? 3) : ($device->device_gap_timeout ?? 3);
+            $ts  = $latestTimestamps[$id] ?? null;
+
+            if ($ts === null) {
+                $statuses[$id] = 'Offline';
+            } else {
+                $diffMinutes = ($now - $ts) / 60;
+                $statuses[$id] = $diffMinutes > $gap ? 'Offline' : 'Online';
+            }
+        }
+
+        return $statuses;
     }
 
 
@@ -177,8 +208,11 @@ class UserController extends Controller
 
         // STEP 1: Eager load dengan optimized relationships
         $userAccess = AccessModel::where('user_id', $userId)
-            ->with(['category', 'device'])
-            ->get();
+            ->with([
+                'category:id,category_name,category_icon',
+                'device:id,device_id,device_name,location,latitude,longitude,device_gap_timeout,device_category',
+            ])
+            ->get(['id', 'user_id', 'category_id', 'device_id']);
 
         // Early exit jika tidak ada data
         if ($userAccess->isEmpty()) {
@@ -186,9 +220,16 @@ class UserController extends Controller
             return view('user.dashboard', ['deviceCategories' => []]);
         }
 
+        // Batch-fetch device statuses (1 query instead of N)
+        $deviceObjectsForStatus = $userAccess->pluck('device')->filter()->unique('device_id')
+            ->map(fn($d) => ['device_id' => $d->device_id, 'device_gap_timeout' => $d->device_gap_timeout])
+            ->values()
+            ->toArray();
+        $deviceStatuses = $this->getDeviceStatusBatch($deviceObjectsForStatus);
+
         // STEP 2: Build response dengan collection methods (memory operations, no queries)
         $deviceCategories = $userAccess->groupBy('category.category_name')
-            ->map(function ($group) {
+            ->map(function ($group) use ($deviceStatuses) {
                 $category = $group->first()->category;
 
                 if (!$category) {
@@ -197,7 +238,7 @@ class UserController extends Controller
 
                 $devices = $group->filter(function ($access) {
                     return $access->device !== null;
-                })->map(function ($access) {
+                })->map(function ($access) use ($deviceStatuses) {
                     $device = $access->device;
 
                     return [
@@ -206,7 +247,7 @@ class UserController extends Controller
                         'location' => $device->location,
                         'latitude' => $device->latitude,
                         'longitude' => $device->longitude,
-                        'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                        'status' => $deviceStatuses[$device->device_id] ?? 'Offline',
                     ];
                 })->values();
 
@@ -286,16 +327,10 @@ class UserController extends Controller
             return response()->json([]);
         }
 
-        // STEP 2: Get LATEST data untuk SEMUA sensor sekaligus (1 query, bukan N query!)
-        // Gunakan MAX(id) per parameter_name untuk efficiency
-        $latestDataIds = LatestDataModel::select(DB::raw('MAX(id) as id'))
-            ->where('device_id', $deviceId)
+        // STEP 2: Get LATEST data untuk SEMUA sensor sekaligus (1 query)
+        // tbl_latest_data has unique(device_id, parameter_name) — one row per device+param
+        $latestDataCollection = LatestDataModel::where('device_id', $deviceId)
             ->whereIn('parameter_name', $sensors->keys()->toArray())
-            ->groupBy('parameter_name')
-            ->pluck('id');
-
-        // STEP 3: Fetch actual data rows (1 query)
-        $latestDataCollection = LatestDataModel::whereIn('id', $latestDataIds)
             ->get()
             ->keyBy('parameter_name'); // Key by parameter_name untuk easy lookup
 
@@ -342,6 +377,7 @@ class UserController extends Controller
         } else {
             $sensor = SensorModel::where('device_id', $deviceId)
                 ->where('parameter_name', $parameter)
+                ->with('device:id,device_id,device_gap_timeout')
                 ->first();
             Cache::put($sensorCacheKey, $sensor, now()->addMinutes(10));
         }
@@ -367,10 +403,7 @@ class UserController extends Controller
         $values = [];
         $previousTime = null;
 
-        $gapTimeout = 1; // Default gap timeout in minutes
-        if ($device = DeviceModel::where('device_id', $deviceId)->first()) {
-            $gapTimeout = $device->device_gap_timeout ?? 1;
-        }
+        $gapTimeout = $sensor ? ($sensor->device->device_gap_timeout ?? 1) : 1;
 
 
         foreach ($data as $item) {
@@ -730,12 +763,14 @@ class UserController extends Controller
             'device_longitude' => $device->longitude,
         ];
 
-        $deviceConfig = SensorModel::where('device_id', $deviceId)->where('status', 'active')->get();
+        $deviceConfig = SensorModel::where('device_id', $deviceId)
+            ->where('status', 'active')
+            ->with('parameter:parameter_name,parameter_label')
+            ->get();
         $dataConfig = [];
         foreach ($deviceConfig as $config) {
-            $parameter = ParameterModel::where('parameter_name', $config->parameter_name)->first();
             $dataConfig[] = [
-                'parameter' => $parameter ? $parameter->parameter_label : null,
+                'parameter' => $config->parameter ? $config->parameter->parameter_label : null,
                 'sensor_name' => $config->sensor_name,
                 'device_name' => $config->sensor_number,
                 'unit' => $config->sensor_unit,
@@ -2000,6 +2035,36 @@ class UserController extends Controller
                 ->keyBy('parameter_name');
 
             // ── Build stats array with max/min timestamps ─────────────────
+            // Batch-fetch the timestamp for each max/min value (2 queries instead of 2N)
+            // Use orWhere pairs instead of row-value IN (Laravel doesn't support nested arrays in whereIn)
+            $maxTimestamps = DataModel::where('device_id', $deviceId)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->where(function ($q) use ($aggregates) {
+                    foreach ($aggregates as $paramName => $agg) {
+                        $q->orWhere(function ($q2) use ($paramName, $agg) {
+                            $q2->where('parameter_name', $paramName)
+                               ->where('value', $agg->max_value);
+                        });
+                    }
+                })
+                ->select('parameter_name', DB::raw('MIN(timestamp) as ts'))
+                ->groupBy('parameter_name')
+                ->pluck('ts', 'parameter_name');
+
+            $minTimestamps = DataModel::where('device_id', $deviceId)
+                ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
+                ->where(function ($q) use ($aggregates) {
+                    foreach ($aggregates as $paramName => $agg) {
+                        $q->orWhere(function ($q2) use ($paramName, $agg) {
+                            $q2->where('parameter_name', $paramName)
+                               ->where('value', $agg->min_value);
+                        });
+                    }
+                })
+                ->select('parameter_name', DB::raw('MIN(timestamp) as ts'))
+                ->groupBy('parameter_name')
+                ->pluck('ts', 'parameter_name');
+
             $stats = [];
             foreach ($sensors as $sensor) {
                 $paramName = $sensor->parameter_name;
@@ -2007,19 +2072,8 @@ class UserController extends Controller
                 $maxDt     = $minDt = null;
 
                 if ($agg) {
-                    $maxTs = DataModel::where('device_id', $deviceId)
-                        ->where('parameter_name', $paramName)
-                        ->where('value', $agg->max_value)
-                        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
-                        ->orderBy('timestamp')
-                        ->value('timestamp');
-
-                    $minTs = DataModel::where('device_id', $deviceId)
-                        ->where('parameter_name', $paramName)
-                        ->where('value', $agg->min_value)
-                        ->whereBetween('timestamp', [$startDateUnix, $endDateUnix])
-                        ->orderBy('timestamp')
-                        ->value('timestamp');
+                    $maxTs = $maxTimestamps[$paramName] ?? null;
+                    $minTs = $minTimestamps[$paramName] ?? null;
 
                     $maxDt = $maxTs ? Carbon::createFromTimestamp($maxTs, 'UTC')->setTimezone($tz) : null;
                     $minDt = $minTs ? Carbon::createFromTimestamp($minTs, 'UTC')->setTimezone($tz) : null;
@@ -2498,16 +2552,11 @@ class UserController extends Controller
     //ambil total notif logs belum dibaca user
     public function getUnreadLogsCount()
     {
-        $unreadCount = AccessModel::with(['device.logs' => function ($query) {
-            $query->where('is_read_user', false);
-            // kategori != 'Email' dan kategori != 'WhatsApp' untuk menghitung hanya logs yang belum dibaca tanpa memperhatikan kategori
-            $query->whereNotIn('category', ['Email', 'whatsapp_alert']);
-        }])
-            ->where('user_id', Auth::user()->id)
-            ->get()
-            ->flatMap(function ($access) {
-                return $access->device->logs;
-            })
+        $deviceIds = AccessModel::where('user_id', Auth::id())->pluck('device_id');
+
+        $unreadCount = LogsModel::whereIn('device_id', $deviceIds)
+            ->where('is_read_user', false)
+            ->whereNotIn('category', ['Email', 'whatsapp_alert'])
             ->count();
 
         return response()->json([
@@ -2616,30 +2665,23 @@ class UserController extends Controller
             $cacheKey = "user:{$userId}:devices-list";
             $cacheTTL = 10; // Cache 10 menit
 
-            // Check if cached
-            if (Cache::has($cacheKey)) {
-                return response()->json(Cache::get($cacheKey), 200);
-            }
+            $response = Cache::remember($cacheKey, now()->addMinutes($cacheTTL), function () use ($userId) {
+                $devices = AccessModel::join('tbl_device', 'tbl_access.device_id', '=', 'tbl_device.device_id')
+                    ->where('tbl_access.user_id', $userId)
+                    ->select('tbl_device.device_id', 'tbl_device.device_name', 'tbl_device.device_category')
+                    ->distinct()
+                    ->get()
+                    ->map(function ($device) {
+                        return [
+                            'device_id'   => $device->device_id,
+                            'device_name' => $device->device_name,
+                            'category'    => $device->device_category,
+                        ];
+                    });
 
-            $devices = AccessModel::with('device')
-                ->where('user_id', $userId)
-                ->get()
-                ->map(function ($access) {
-                    return [
-                        'device_id' => $access->device->device_id,
-                        'device_name' => $access->device->device_name,
-                        'category' => $access->device->device_category,
-                    ];
-                })
-                ->unique('device_id')
-                ->values();
+                return ['success' => true, 'data' => $devices];
+            });
 
-            $response = [
-                'success' => true,
-                'data' => $devices,
-            ];
-
-            Cache::put($cacheKey, $response, now()->addMinutes($cacheTTL));
             return response()->json($response, 200);
         } catch (\Exception $e) {
             return response()->json([
@@ -2653,12 +2695,8 @@ class UserController extends Controller
     public function markLogsAsRead()
     {
         try {
-            // Get all device IDs accessible by user
-            $deviceIds = AccessModel::with('device')
-                ->where('user_id', Auth::user()->id)
-                ->get()
-                ->pluck('device.device_id')
-                ->filter(); // Remove null device_ids
+            // Get all device IDs accessible by user (direct pluck, no eager load)
+            $deviceIds = AccessModel::where('user_id', Auth::id())->pluck('device_id');
 
             // Update all unread logs for these devices
             LogsModel::whereIn('device_id', $deviceIds)
