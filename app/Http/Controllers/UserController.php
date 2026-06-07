@@ -1498,8 +1498,8 @@ class UserController extends Controller
     public function exportReportExcel(Request $request)
     {
         // Raise limits – large exports can take time and memory
-        ini_set('memory_limit', '512M');
-        set_time_limit(600);
+        ini_set('memory_limit', '2G');
+        set_time_limit(0); // unlimited – controlled by Nginx/PHP-FPM timeouts
 
         try {
             $validated = $request->validate([
@@ -1673,17 +1673,30 @@ class UserController extends Controller
             $sheet->setCellValue("B{$totalRecordsRow}", $totalRecords);
 
             // ── Post-loop formatting ─────────────────────────────────────
-            // Auto-size columns
-            for ($c = 1; $c <= $totalColumns; $c++) {
-                $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
+            // Fixed column widths – setAutoSize(true) iterates every cell during save,
+            // which is O(rows × cols) and kills performance for large datasets.
+            $sheet->getColumnDimensionByColumn(1)->setWidth(8);   // No
+            $sheet->getColumnDimensionByColumn(2)->setWidth(14);  // Date
+            $sheet->getColumnDimensionByColumn(3)->setWidth(10);  // Time
+            for ($c = 4; $c <= $totalColumns; $c++) {
+                $sheet->getColumnDimensionByColumn($c)->setWidth(16); // parameter columns
             }
 
-            // Borders on the full table range
+            // Borders: full-range border on large datasets expands into individual cell
+            // style objects and consumes too much memory. Apply only to header row for
+            // large exports; full table border for small ones.
             $lastDataRow = $dataRow - 1;
             if ($lastDataRow >= $tableHeaderRow) {
-                $sheet->getStyle("A{$tableHeaderRow}:{$lastCol}{$lastDataRow}")
-                    ->getBorders()->getAllBorders()
-                    ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+                if ($totalRecords <= 10000) {
+                    $sheet->getStyle("A{$tableHeaderRow}:{$lastCol}{$lastDataRow}")
+                        ->getBorders()->getAllBorders()
+                        ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+                } else {
+                    // Header row only
+                    $sheet->getStyle("A{$tableHeaderRow}:{$lastCol}{$tableHeaderRow}")
+                        ->getBorders()->getAllBorders()
+                        ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN);
+                }
             }
 
             // Freeze header row
