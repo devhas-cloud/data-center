@@ -11,6 +11,7 @@ use App\Models\DataModel;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class AdminHomeController extends Controller
 {
@@ -88,12 +89,7 @@ class AdminHomeController extends Controller
                 ->where('user_assigned', '=', Auth::user()->id)
                 ->get();
 
-
-
-
         }
-
-
 
 
         return view('admin.manage_home',[
@@ -108,7 +104,7 @@ class AdminHomeController extends Controller
     public function getAdminDevicesData()
     {
         $cacheKey = "admin:devices:home:" . Auth::user()->id;
-        $cacheTTL = 5; // Cache 5 menit
+        $cacheTTL = 2; // Cache 2 menit
 
         // Check if cached
         if (Cache::has($cacheKey)) {
@@ -142,30 +138,18 @@ class AdminHomeController extends Controller
             ->get();
         }
 
-        // Collect device IDs untuk fetch latest data
-        $deviceIds = $deviceCategories
+
+         // Batch-fetch device statuses (1 query instead of N)
+        $deviceObjectsForStatus = $deviceCategories
             ->pluck('devices')
             ->flatten()
-            ->pluck('device_id')
-            ->filter()
-            ->unique()
+            ->map(fn($d) => ['device_id' => $d->device_id, 'device_gap_timeout' => $d->device_gap_timeout])
+            ->values()
             ->toArray();
-
-        // Early exit jika tidak ada devices
-        if (empty($deviceIds)) {
-            Cache::put($cacheKey, [], now()->addMinutes($cacheTTL));
-            return response()->json([]);
-        }
-
-        // Fetch latest data untuk semua devices sekaligus (efficient)
-        $latestDataCollection = LatestDataModel::whereIn('device_id', $deviceIds)
-            ->get()
-            ->keyBy(function ($item) {
-                return $item->device_id . '|' . $item->parameter_name;
-            });
+        $deviceStatuses = $this->getDeviceStatusBatch($deviceObjectsForStatus);
 
         // Build response dengan sensor data
-        $result = $deviceCategories->map(function ($category) use ($latestDataCollection) {
+        $result = $deviceCategories->map(function ($category) use ($deviceStatuses) {
             $category_obj = $category;
 
             // Skip jika kategori null
@@ -175,22 +159,8 @@ class AdminHomeController extends Controller
 
             $devices = $category_obj->devices->filter(function ($device) {
                 return $device !== null;
-            })->map(function ($device) use ($latestDataCollection) {
-                $sensorsData = $device->sensors->map(function ($sensor) use ($device, $latestDataCollection) {
-                    $key = $device->device_id . '|' . $sensor->parameter_name;
-                    $latestData = $latestDataCollection->get($key);
+            })->map(function ($device) use ($deviceStatuses) {
 
-                    // Jika tidak ada latest data, return null
-                    if (!$latestData) {
-                        return null;
-                    }
-
-                    return [
-                        'parameter_name' => $sensor->parameter_name,
-                        'latest_value'   => $latestData->value,
-                        'recorded_at'    => $this->unixToDateTime($latestData->timestamp)->format('Y-m-d H:i:s'),
-                    ];
-                })->filter()->values();
 
                 return [
                     'device_id'   => $device->device_id,
@@ -198,8 +168,7 @@ class AdminHomeController extends Controller
                     'location'    => $device->location,
                     'latitude'    => $device->latitude,
                     'longitude'   => $device->longitude,
-                    'status'      => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
-                    'sensors'     => $sensorsData->toArray(),
+                    'status'      => $deviceStatuses[$device->device_id] ?? null,
                 ];
             })->values();
 
@@ -211,10 +180,44 @@ class AdminHomeController extends Controller
             ];
         })->filter()->values()->toArray();
 
-        // Cache hasil selama 5 menit
+        // Cache hasil selama 2 menit
         Cache::put($cacheKey, $result, now()->addMinutes($cacheTTL));
 
         return response()->json($result);
+    }
+
+
+    private function getDeviceStatusBatch(array $devices): array
+    {
+        if (empty($devices)) {
+            return [];
+        }
+
+        $deviceIds = array_column($devices, 'device_id');
+
+        // One query: get max timestamp per device from tbl_latest_data
+        $latestTimestamps = LatestDataModel::whereIn('device_id', $deviceIds)
+            ->select('device_id', DB::raw('MAX(timestamp) as timestamp'))
+            ->groupBy('device_id')
+            ->pluck('timestamp', 'device_id');
+
+        $now = Carbon::now()->timestamp;
+        $statuses = [];
+
+        foreach ($devices as $device) {
+            $id  = is_array($device) ? $device['device_id'] : $device->device_id;
+            $gap = is_array($device) ? ($device['device_gap_timeout'] ?? 3) : ($device->device_gap_timeout ?? 3);
+            $ts  = $latestTimestamps[$id] ?? null;
+
+            if ($ts === null) {
+                $statuses[$id] = 'Offline';
+            } else {
+                $diffMinutes = ($now - $ts) / 60;
+                $statuses[$id] = $diffMinutes > $gap ? 'Offline' : 'Online';
+            }
+        }
+
+        return $statuses;
     }
 
 
