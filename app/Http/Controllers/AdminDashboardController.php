@@ -15,6 +15,41 @@ use Illuminate\Support\Facades\Cache;
 
 class AdminDashboardController extends Controller
 {
+
+    private function getDeviceStatusBatch(array $devices): array
+    {
+        if (empty($devices)) {
+            return [];
+        }
+
+        $deviceIds = array_column($devices, 'device_id');
+
+        // One query: get max timestamp per device from tbl_latest_data
+        $latestTimestamps = LatestDataModel::whereIn('device_id', $deviceIds)
+            ->select('device_id', DB::raw('MAX(timestamp) as timestamp'))
+            ->groupBy('device_id')
+            ->pluck('timestamp', 'device_id');
+
+        $now = Carbon::now()->timestamp;
+        $statuses = [];
+
+        foreach ($devices as $device) {
+            $id  = is_array($device) ? $device['device_id'] : $device->device_id;
+            $gap = is_array($device) ? ($device['device_gap_timeout'] ?? 3) : ($device->device_gap_timeout ?? 3);
+            $ts  = $latestTimestamps[$id] ?? null;
+
+            if ($ts === null) {
+                $statuses[$id] = 'Offline';
+            } else {
+                $diffMinutes = ($now - $ts) / 60;
+                $statuses[$id] = $diffMinutes > $gap ? 'Offline' : 'Online';
+            }
+        }
+
+        return $statuses;
+    }
+
+
     public function index()
     {
         $cacheKey = "admin:dashboard:devices";
@@ -47,7 +82,7 @@ class AdminDashboardController extends Controller
                             'location' => $device->location,
                             'latitude' => $device->latitude,
                             'longitude' => $device->longitude,
-                            'status' => $this->DeviceStatus($device->device_id, $device->device_gap_timeout),
+                            'status' => "Online", // Placeholder, will be replaced by batch status
                         ];
                     })->toArray(),
                 ];
@@ -103,7 +138,7 @@ class AdminDashboardController extends Controller
         // } else {
         //     $statusMessage = "Offline";
         // }
-        
+
         # Perbaiki metode pengecekan status dimana jika data terakhir lebih dari 6 menit yang lalu, maka dianggap offline
         $latestData = DataModel::where('device_id', $deviceId)->orderBy('timestamp', 'desc')->first();
         if (!$latestData) {
